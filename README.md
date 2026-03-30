@@ -14,7 +14,7 @@ Servicio PHP independiente del core **MCM Cultiva**. El código se movió desde 
 ## Puesta en marcha
 
 1. Copiar `App/config/database.ini.example` → `App/config/database.ini` y completar Oracle: usuario del servicio PUI, `ESQUEMA` = servicio del listener, contraseña solo local. Misma instancia que Cultiva si el DBA otorga permisos o sinónimos hacia el padrón.
-2. Ajustar `App/config/pui.ini` (no versionar secretos reales).
+2. Copiar `App/config/pui.example.ini` → `App/config/pui.ini` y completar valores locales (`pui.ini` no se versiona).
 3. Desarrollo: `php -S localhost:8080 -t public public/router.php` → probar `GET /api/pui/salud`.
 4. Jobs: desde la raíz del repo, `php Jobs/controllers/JobTableRunner.php run-once`.
 

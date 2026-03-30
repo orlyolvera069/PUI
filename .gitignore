@@ -1,5 +1,6 @@
 /vendor/
 /App/config/database.ini
+/App/config/pui.ini
 *.log
 /.env
 /App/storage/pui/rate_limit.json
