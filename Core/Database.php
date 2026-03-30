@@ -33,7 +33,7 @@ class Database
         try {
             $this->db_activa =  new PDO($cadena, $usuario, $password);
         } catch (\PDOException $e) {
-            self::baseNoDisponible("{$e->getMessage()}\nDatos de conexión: $cadena\nUsuario: $usuario\nPassword: $password");
+            self::baseNoDisponible("{$e->getMessage()}\nDatos de conexión: $cadena\nUsuario: $usuario\nPassword: (oculto)");
             $this->db_activa =  null;
         }
     }

@@ -57,7 +57,17 @@ class PuiFrontController
             }
 
             if ($method === 'POST' && $path === '/login') {
+                if (!$this->isJsonRequest()) {
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'Content-Type debe ser application/json.');
+                    return;
+                }
                 $body = $this->readJsonBody();
+                $missing = $this->missingKeys($body, ['usuario', 'clave']);
+                if ($body === [] || $missing !== []) {
+                    $detalle = $missing !== [] ? ('Faltan campos: ' . implode(', ', $missing)) : 'JSON inválido o vacío.';
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', $detalle);
+                    return;
+                }
                 $r = $this->login->login($body);
                 $this->sendRaw($r['status'], $r['body']);
                 return;
@@ -140,7 +150,7 @@ class PuiFrontController
             $this->emitError($requestId, 404, 'PUI-HTTP-404', 'Ruta no definida para el módulo PUI.');
         } catch (\Throwable $e) {
             PuiLogger::error($requestId, 'exception', ['msg' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
-            $this->emitError($requestId, 500, 'PUI-ERR-500', 'Error interno al procesar la solicitud.');
+            throw $e;
         }
     }
 
@@ -275,11 +285,24 @@ class PuiFrontController
         return !$limiter->allow($key, $limit, $window);
     }
 
+    private function isJsonRequest(): bool
+    {
+        $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? ''));
+        if ($contentType === '') {
+            return false;
+        }
+        return str_contains($contentType, 'application/json');
+    }
+
     /** @param array<string,mixed> $body */
     private function sendRaw(int $status, array $body): void
     {
+        if (function_exists('jsonResponse')) {
+            jsonResponse($body, $status);
+        }
         http_response_code($status);
         echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
     }
 
     private function emitError(string $requestId, int $http, string $codigo, string $mensaje, ?string $detalle = null): void
@@ -297,8 +320,7 @@ class PuiFrontController
             $d = null;
             $m = 'Error en el servicio.';
         }
-        http_response_code($http);
-        echo json_encode([
+        $payload = [
             'meta' => [
                 'requestId' => $requestId,
                 'timestamp' => gmdate('c'),
@@ -309,6 +331,12 @@ class PuiFrontController
                 'mensaje' => $m,
                 'detalle' => $d,
             ],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        ];
+        if (function_exists('jsonResponse')) {
+            jsonResponse($payload, $http);
+        }
+        http_response_code($http);
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
     }
 }

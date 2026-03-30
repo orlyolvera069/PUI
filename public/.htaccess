@@ -1,0 +1,4 @@
+RewriteEngine On
+
+# Prioridad absoluta para API PUI: evita caer en rutas MVC/HTML.
+RewriteRule ^api/pui(/.*)?$ api/pui/index.php [QSA,L]

@@ -60,6 +60,8 @@ class PuiConfig
         'PUI_ENABLE_ACTIVAR_PRUEBA',
         'PUI_OUTBOUND_PING_PATH',
         'PUI_OUTBOUND_PING_TIMEOUT_MS',
+        'PUI_PADRON_SCHEMA',
+        'PUI_FASE3_DAEMON_SLEEP_SECONDS',
     ];
 
     /** @var array<string,mixed>|null */

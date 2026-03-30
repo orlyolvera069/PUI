@@ -2,3 +2,4 @@
 /App/config/database.ini
 *.log
 /.env
+/App/storage/pui/rate_limit.json

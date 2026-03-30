@@ -1,8 +1,12 @@
-; Copiar a database.ini y completar (misma Oracle que MCM si aplica).
-; NO subir database.ini al repositorio.
+; Copiar a database.ini y completar. NO subir database.ini al repositorio.
+;
+; Auditoría: el servicio PUI debe usar el usuario Oracle dedicado (p. ej. PUI) y tablas propias
+; en ese esquema; la contraseña solo en entorno / database.ini.
+; ESQUEMA = nombre del servicio en el listener (cadena oci:dbname=//HOST:1521/ESQUEMA), no el nombre
+; lógico del usuario si difiere.
 
 SERVIDOR  = host.oracle
 PUERTO    = 1521
-USUARIO   = ESQUEMA
-PASSWORD  = ****
-ESQUEMA   = ESQUEMA
+USUARIO   = PUI
+PASSWORD  = (definir solo en entorno)
+ESQUEMA   = ORCL

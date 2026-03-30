@@ -14,6 +14,8 @@
 
 declare(strict_types=1);
 
+ob_start();
+
 error_reporting(E_ALL);
 ini_set('display_errors', '0');
 
@@ -40,5 +42,61 @@ if (
     header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
 }
 
-$controller = new PuiFrontController();
-$controller->dispatch();
+function jsonResponse($data, int $status = 200): void
+{
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    http_response_code($status);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function puiErrorEnvelope(string $requestId): array
+{
+    return [
+        'meta' => [
+            'requestId' => $requestId,
+            'timestamp' => gmdate('c'),
+            'version' => '1.0.0',
+        ],
+        'error' => [
+            'codigo' => 'PUI-ERR-500',
+            'mensaje' => 'Error interno',
+            'detalle' => null,
+        ],
+    ];
+}
+
+set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+    throw new \ErrorException($message, 0, $severity, $file, $line);
+});
+
+set_exception_handler(static function (\Throwable $e): void {
+    $requestId = bin2hex(random_bytes(16));
+    jsonResponse(puiErrorEnvelope($requestId), 500);
+});
+
+register_shutdown_function(static function (): void {
+    $last = error_get_last();
+    if ($last === null) {
+        return;
+    }
+    $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+    if (!in_array($last['type'], $fatalTypes, true)) {
+        return;
+    }
+    $requestId = bin2hex(random_bytes(16));
+    jsonResponse(puiErrorEnvelope($requestId), 500);
+});
+
+try {
+    $controller = new PuiFrontController();
+    $controller->dispatch();
+} catch (\Throwable $e) {
+    jsonResponse(puiErrorEnvelope(bin2hex(random_bytes(16))), 500);
+}

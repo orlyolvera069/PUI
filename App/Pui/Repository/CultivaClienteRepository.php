@@ -10,6 +10,10 @@ use Core\Database;
  */
 class CultivaClienteRepository
 {
+    /**
+     * Consulta base sobre padrón de clientes (CL). Si la conexión es el usuario Oracle PUI,
+     * puede usarse PUI_PADRON_SCHEMA en pui.ini para calificar tablas del esquema productivo (CL, EF, COL).
+     */
     private const SELECT_BASE = <<<SQL
         SELECT
             CL.CODIGO AS CODIGO_CLIENTE,
@@ -34,6 +38,32 @@ class CultivaClienteRepository
         LEFT JOIN COL ON CL.CDGCOL = COL.CODIGO AND CL.CDGLO = COL.CDGLO AND CL.CDGMU = COL.CDGMU AND CL.CDGEF = COL.CDGEF
     SQL;
 
+    /** @return string SQL FROM/JOIN calificado si PUI_PADRON_SCHEMA está definido */
+    private static function selectBaseSql(): string
+    {
+        $sch = trim((string) PuiConfig::get('PUI_PADRON_SCHEMA', ''));
+        if ($sch === '' || !preg_match('/^[A-Z0-9_]+$/i', $sch)) {
+            return self::SELECT_BASE;
+        }
+        $s = strtoupper($sch);
+        return str_replace(
+            ['FROM CL', 'LEFT JOIN EF ON', 'LEFT JOIN COL ON'],
+            ["FROM {$s}.CL CL", "LEFT JOIN {$s}.EF EF ON", "LEFT JOIN {$s}.COL COL ON"],
+            self::SELECT_BASE
+        );
+    }
+
+    /** Fragmento FROM para consultas que solo usan CL (sin EF/COL). */
+    private static function padronClFromClause(): string
+    {
+        $sch = trim((string) PuiConfig::get('PUI_PADRON_SCHEMA', ''));
+        if ($sch === '' || !preg_match('/^[A-Z0-9_]+$/i', $sch)) {
+            return 'CL';
+        }
+        $s = strtoupper($sch);
+        return "{$s}.CL CL";
+    }
+
     /** Fase 1: coincidencia exacta por CURP (datos básicos). */
     public function buscarFase1PorCurpExacta(string $curp18): ?array
     {
@@ -41,7 +71,7 @@ class CultivaClienteRepository
         if ($db->db_activa === null) {
             return null;
         }
-        $sql = self::SELECT_BASE . ' WHERE UPPER(TRIM(CL.CURP)) = :curp AND ROWNUM = 1';
+        $sql = self::selectBaseSql() . ' WHERE UPPER(TRIM(CL.CURP)) = :curp AND ROWNUM = 1';
         $row = $db->queryOne($sql, ['curp' => $curp18]);
         return !empty($row) ? $row : null;
     }
@@ -59,6 +89,7 @@ class CultivaClienteRepository
         }
 
         $curp = strtoupper(preg_replace('/\s+/', '', trim($curp18)) ?? '');
+        $fromCl = self::padronClFromClause();
         $sql = <<<SQL
             SELECT
                 CL.CODIGO AS CODIGO_CLIENTE,
@@ -74,7 +105,7 @@ class CultivaClienteRepository
                 TRIM(CL.CDGEF) AS CDGEF,
                 TRIM(CL.CDGMU) AS CDGMU,
                 TRIM(CL.CALLE) AS CALLE
-            FROM CL
+            FROM {$fromCl}
             WHERE UPPER(REGEXP_REPLACE(TRIM(CL.CURP), '[[:space:]]+', '')) = UPPER(REGEXP_REPLACE(TRIM(:curp), '[[:space:]]+', ''))
               AND ROWNUM = 1
         SQL;
@@ -87,11 +118,6 @@ class CultivaClienteRepository
         return !empty($row) ? $row : null;
     }
 
-    /**
-     * Fase 2: búsqueda “histórica” por fragmento de nombre completo (LIKE).
-     *
-     * @return list<array<string,mixed>>
-     */
     /**
      * Fase 2: búsqueda “histórica” por fragmento de nombre (LIKE) acotada por ventana de fecha.
      *
@@ -138,7 +164,7 @@ class CultivaClienteRepository
             $params['rfc_like'] = '%' . strtoupper(trim($rfc)) . '%';
         }
 
-        $sql = 'SELECT * FROM (' . self::SELECT_BASE . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
+        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
         $rows = $db->queryAll($sql, $params);
         return is_array($rows) ? $rows : [];
     }
@@ -186,7 +212,7 @@ class CultivaClienteRepository
             $params['wm'] = strlen($wm) >= 19 ? substr($wm, 0, 19) : $wm;
         }
 
-        $sql = 'SELECT * FROM (' . self::SELECT_BASE . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
+        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
         $params['limite'] = $limite;
 
         $rows = $db->queryAll($sql, $params);
@@ -229,7 +255,7 @@ class CultivaClienteRepository
             $where[] = 'TRUNC(' . $actividad . ') BETWEEN TRUNC(TO_DATE(:fecha_inicio, \'YYYY-MM-DD\')) AND TRUNC(TO_DATE(:fecha_fin, \'YYYY-MM-DD\'))';
         }
 
-        $sql = 'SELECT * FROM (' . self::SELECT_BASE . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
+        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
         $rows = $db->queryAll($sql, $params);
         return is_array($rows) ? $rows : [];
     }
