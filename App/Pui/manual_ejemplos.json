@@ -1,0 +1,96 @@
+{
+  "fuente": "Manual Técnico de la Solución Tecnológica para Instituciones Diversas — PUI v1.0 (13/01/2026), DOF 23/01/2026",
+  "nota_auxiliar": "Los endpoints /persona y /busqueda en esta implementación son auxiliares para monitoreo/debug y no forman parte del flujo oficial por eventos.",
+  "7_1_login_pui_hacia_institucion_no_aplica_aqui": "La institución implementa §8.1; la PUI expone §7.1 con institucion_id+clave.",
+  "8_1_login_institucion_solicitud": {
+    "usuario": "PUI",
+    "clave": "Aa1!aaaaaaaaaaaaaa"
+  },
+  "8_1_login_institucion_respuesta_200": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  },
+  "8_1_login_institucion_respuesta_403": {
+    "error": "Credenciales inválidas"
+  },
+  "7_2_notificar_coincidencia_solicitud_ejemplo_manual": {
+    "curp": "XEXX010101HNEXXXA0",
+    "nombre_completo": {
+      "nombre": "Juan",
+      "primer_apellido": "Pérez",
+      "segundo_apellido": "López"
+    },
+    "fecha_nacimiento": "1990-05-15",
+    "lugar_nacimiento": "CDMX",
+    "sexo_asignado": "H",
+    "telefono": "5512345678",
+    "correo": "juan.perez@example.com",
+    "domicilio": {
+      "direccion": "Calle Reforma 123,Centro",
+      "calle": "Reforma",
+      "numero": "123",
+      "colonia": "Centro",
+      "codigo_postal": "06000",
+      "municipio_o_alcaldia": "Cuauhtémoc",
+      "entidad_federativa": "CDMX"
+    },
+    "id": "e7b5a4c2-9f4e-4a99-91a2-6d4a8a1eaf3d-550e8400-e29b-41d4-a716-446655440000",
+    "institucion_id": "0000",
+    "tipo_evento": "Apertura de cuenta bancaria",
+    "fecha_evento": "2025-05-21",
+    "descripcion_lugar_evento": "Sucursal 22 Lomas Estrella",
+    "direccion_evento": {
+      "direccion": "Cerrada Zacarías Topete 1562 Int. B, De los Ángeles, San Luis Potosí",
+      "calle": "Cerrada Zacarías Topete",
+      "numero": "1562 Int. B",
+      "colonia": "De los Ángeles",
+      "codigo_postal": "01245",
+      "municipio_o_alcaldia": "San Luis Potosí",
+      "entidad_federativa": "SAN LUIS POTOSÍ"
+    },
+    "fase_busqueda": "1"
+  },
+  "7_2_notificar_coincidencia_respuesta_200": {
+    "message": "Coincidencia recibida correctamente"
+  },
+  "7_3_busqueda_finalizada_solicitud": {
+    "id": "e7b5a4c2-9f4e-4a99-91a2-6d4a8a1eaf3d-550e8400-e29b-41d4-a716-446655440000",
+    "institucion_id": "0000"
+  },
+  "7_3_busqueda_finalizada_respuesta_200": {
+    "message": "Registro de finalización de búsqueda histórica guardado correctamente."
+  },
+  "8_2_activar_reporte_solicitud_campos_obligatorios": {
+    "id": "e7b5a4c2-9f4e-4a99-91a2-6d4a8a1eaf3d-550e8400-e29b-41d4-a716-446655440000",
+    "curp": "XEXX010101HNEXXXA0",
+    "lugar_nacimiento": "CDMX"
+  },
+  "8_2_activar_reporte_respuesta_200": {
+    "message": "La solicitud de activación del reporte de búsqueda se recibió correctamente."
+  },
+  "8_3_activar_reporte_prueba_ejemplo_manual": {
+    "id": "A1B2C3D4E5F6-550e8400-e29b-41d4-a716-446655440000",
+    "curp": "TEST010101HDFABC01",
+    "nombre": "JUAN",
+    "primer_apellido": "PEREZ",
+    "segundo_apellido": "LOPEZ",
+    "fecha_nacimiento": "1990-01-01",
+    "fecha_desaparicion": "2024-12-15",
+    "lugar_nacimiento": "CDMX",
+    "sexo_asignado": "H",
+    "telefono": "5512345678",
+    "correo": "juan.perez@example.com",
+    "direccion": "CALLE FICTICIA 123, CENTRO",
+    "calle": "CALLE FICTICIA",
+    "numero": "123",
+    "colonia": "CENTRO",
+    "codigo_postal": "06000",
+    "municipio_o_alcaldia": "CUAUHTÉMOC",
+    "entidad_federativa": "CDMX"
+  },
+  "8_4_desactivar_reporte_solicitud": {
+    "id": "e7b5a4c2-9f4e-4a99-91a2-6d4a8a1eaf3d-550e8400-e29b-41d4-a716-446655440000"
+  },
+  "8_4_desactivar_reporte_respuesta_200": {
+    "message": "Registro de finalización de búsqueda histórica guardado correctamente"
+  }
+}

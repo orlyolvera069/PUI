@@ -1,0 +1,8 @@
+; Copiar a database.ini y completar (misma Oracle que MCM si aplica).
+; NO subir database.ini al repositorio.
+
+SERVIDOR  = host.oracle
+PUERTO    = 1521
+USUARIO   = ESQUEMA
+PASSWORD  = ****
+ESQUEMA   = ESQUEMA

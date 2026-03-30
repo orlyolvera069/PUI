@@ -1,0 +1,4 @@
+/vendor/
+/App/config/database.ini
+*.log
+/.env

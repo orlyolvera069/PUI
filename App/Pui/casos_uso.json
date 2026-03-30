@@ -1,0 +1,20 @@
+{
+  "version": "4-eventos-oracle-jobs",
+  "base": "/api/pui",
+  "endpoints_oficiales": [
+    "POST /api/pui/login",
+    "POST /api/pui/activar-reporte",
+    "POST /api/pui/activar-reporte-prueba",
+    "POST /api/pui/desactivar-reporte",
+    "GET /api/pui/salud"
+  ],
+  "endpoints_auxiliares_debug": [
+    "GET /api/pui/persona/{curp}",
+    "POST /api/pui/busqueda"
+  ],
+  "login_solicitud_8_1": { "usuario": "PUI", "clave": "ver pui.ini PUI_LOGIN_CLAVE" },
+  "login_respuesta": { "token": "JWT" },
+  "headers": "Authorization: Bearer {token}",
+  "referencia_ejemplos": "App/Pui/manual_ejemplos.json",
+  "comparativa": "App/Pui/docs/MAPEO_MANUAL_CAMPOS.md"
+}
