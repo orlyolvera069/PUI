@@ -1,0 +1,39 @@
+<?php
+
+namespace App\Pui\Repository;
+
+/**
+ * Registro de coincidencias en memoria — modo simulación Manual Técnico PUI.
+ */
+class PuiCoincidenciaMemoryRepository
+{
+    /** @var list<array<string, mixed>> */
+    private static array $eventos = [];
+
+    /**
+     * @param array<string,mixed> $linea
+     */
+    public function registrarCoincidencia(array $linea): void
+    {
+        self::$eventos[] = $linea;
+    }
+
+    public function existeCoincidenciaFasePorCurp(string $idReporte, string $faseBusqueda, string $curp): bool
+    {
+        $curp = strtoupper(trim($curp));
+        if ($curp === '') {
+            return false;
+        }
+        $needle = '"curp":"' . $curp . '"';
+        foreach (self::$eventos as $ev) {
+            $rid = (string) ($ev['reporte_id'] ?? $ev['id_reporte'] ?? '');
+            $fase = (string) ($ev['fase_busqueda'] ?? '');
+            $payload = (string) ($ev['payload_json'] ?? '');
+            if ($rid === $idReporte && $fase === $faseBusqueda && str_contains($payload, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

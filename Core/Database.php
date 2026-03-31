@@ -4,8 +4,6 @@ namespace Core;
 
 include_once dirname(__DIR__) . "/Core/App.php";
 
-use App\Pui\Http\PuiJsonResponse;
-use App\Pui\Http\PuiLogger;
 use PDO;
 
 /**
@@ -28,37 +26,26 @@ class Database
         $s = $this->configuracion[$s] ?? $s;
         $servidor = $s ?? $this->configuracion['SERVIDOR'];
         $esquema = $this->configuracion['ESQUEMA'] ?? 'ESIACOM';
-        $puerto = (int) ($this->configuracion['PUERTO'] ?? 1521);
-        if ($puerto <= 0 || $puerto > 65535) {
-            $puerto = 1521;
-        }
 
-        $cadena = "oci:dbname=//$servidor:$puerto/$esquema;charset=UTF8";
+        $cadena = "oci:dbname=//$servidor:1521/$esquema;charset=UTF8";
         $usuario = $u ?? $this->configuracion['USUARIO'];
         $password = $p ?? $this->configuracion['PASSWORD'];
         try {
             $this->db_activa =  new PDO($cadena, $usuario, $password);
         } catch (\PDOException $e) {
-            error_log('[PUI][DEBUG] entering DB exception catch');
-            $pdoInfo = $e->errorInfo ?? null;
-            PuiLogger::error(PuiLogger::requestContextId(), 'oracle_error', [
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'trace' => $e->getTraceAsString(),
-                'source' => 'Core\\Database::Conecta',
-                'pdo_error_info' => $pdoInfo,
-            ]);
-            self::baseNoDisponible();
+            $this->db_activa = null;
+            $uri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+            // API JSON (/api/...): no romper el envelope; los repositorios tratan db_activa === null.
+            if (stripos($uri, '/api/') !== false) {
+                error_log('[Database] PDO: ' . $e->getMessage());
+                return;
+            }
+            self::baseNoDisponible("{$e->getMessage()}\nDatos de conexión: $cadena\nUsuario: $usuario\nPassword: (oculto)");
         }
     }
 
-    private function baseNoDisponible(): void
+    private function baseNoDisponible($mensaje)
     {
-        if (defined('PUI_API_JSON') && PUI_API_JSON) {
-            error_log('[PUI] Oracle connection failed');
-            PuiJsonResponse::databaseUnavailable503();
-        }
-
         http_response_code(503);
         echo <<<HTML
             <!DOCTYPE html>
@@ -99,7 +86,13 @@ class Database
                     <h1>Sistema fuera de línea</h1>
                     <p>Estamos trabajando para resolver la situación. Por favor, vuelva a intentarlo más tarde.</p>
                 </div>
+                <input type="hidden" id="baseNoDisponible" value="$mensaje">
             </body>
+            <script>
+                window.onload = () => {
+                    console.log(document.getElementById('baseNoDisponible').value)
+                }
+            </script>
             </html>
         HTML;
         exit();
@@ -132,38 +125,10 @@ class Database
 
     private function muestraError($e, $sql = null, $parametros = null)
     {
-        if (defined('PUI_API_JSON') && PUI_API_JSON) {
-            error_log('[PUI][DEBUG] entering DB exception catch');
-            $reqId = PuiLogger::requestContextId();
-            $ctx = [
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'trace' => $e->getTraceAsString(),
-                'source' => 'Core\\Database::muestraError',
-                'sql_hash' => $sql !== null ? substr(sha1($sql), 0, 12) : null,
-                'params' => $parametros !== null ? PuiLogger::sanitizeParamsForLog($parametros) : null,
-            ];
-            if ($e instanceof \PDOException) {
-                $ctx['pdo_error_info'] = $e->errorInfo ?? null;
-            }
-            if ($e instanceof \PDOException && PuiJsonResponse::isConnectionOrLinkFailure($e)) {
-                PuiLogger::error($reqId, 'oracle_error', $ctx);
-                error_log('[PUI] Oracle link failure');
-                PuiJsonResponse::databaseUnavailable503();
-            }
-            PuiLogger::error($reqId, 'oracle_error', $ctx);
-            error_log('[PUI] database operation failed');
-            return '';
-        }
-
         $error = "Error en DB: " . $e->getMessage();
 
-        if ($sql != null) {
-            $error .= "\nSql: " . $sql;
-        }
-        if ($parametros != null) {
-            $error .= "\nDatos: " . print_r($parametros, 1);
-        }
+        if ($sql != null) $error .= "\nSql: " . $sql;
+        if ($parametros != null) $error .= "\nDatos: " . print_r($parametros, 1);
         echo $error . "\n";
         return $error;
     }

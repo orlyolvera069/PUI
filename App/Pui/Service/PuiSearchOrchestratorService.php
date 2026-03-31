@@ -3,15 +3,14 @@
 namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
-use App\Pui\Exception\DatabaseUnavailableException;
-use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\PuiOutboundClientInterface;
 use App\Pui\Integration\PuiOutboundFactory;
 use App\Pui\Integration\PuiOutboundTimeoutException;
 use App\Pui\Mapper\NotificarCoincidenciaPayloadFactory;
 use App\Pui\Repository\CultivaClienteRepository;
+use App\Pui\Repository\PuiCoincidenciaMemoryRepository;
 use App\Pui\Repository\PuiCoincidenciaOracleRepository;
-use App\Pui\Repository\PuiJobOracleRepository;
+use App\Pui\Repository\PuiReporteActivoMemoryRepository;
 use App\Pui\Repository\PuiReporteActivoOracleRepository;
 use App\Pui\Validation\ManualValidators;
 use App\Pui\Validation\PuiManualPayloadValidator;
@@ -19,20 +18,17 @@ use App\Pui\Validation\PuiManualPayloadValidator;
 class PuiSearchOrchestratorService
 {
     private CultivaClienteRepository $cl;
-    private PuiCoincidenciaOracleRepository $coincidencias;
-    private PuiReporteActivoOracleRepository $reportesActivos;
-    private PuiJobOracleRepository $jobs;
+    private PuiCoincidenciaOracleRepository|PuiCoincidenciaMemoryRepository $coincidencias;
+    private PuiReporteActivoOracleRepository|PuiReporteActivoMemoryRepository $reportesActivos;
 
     public function __construct(
         ?CultivaClienteRepository $cl = null,
-        ?PuiCoincidenciaOracleRepository $coincidencias = null,
-        ?PuiReporteActivoOracleRepository $reportesActivos = null,
-        ?PuiJobOracleRepository $jobs = null
+        PuiCoincidenciaOracleRepository|PuiCoincidenciaMemoryRepository|null $coincidencias = null,
+        PuiReporteActivoOracleRepository|PuiReporteActivoMemoryRepository|null $reportesActivos = null
     ) {
         $this->cl = $cl ?? new CultivaClienteRepository();
         $this->coincidencias = $coincidencias ?? new PuiCoincidenciaOracleRepository();
         $this->reportesActivos = $reportesActivos ?? new PuiReporteActivoOracleRepository();
-        $this->jobs = $jobs ?? new PuiJobOracleRepository();
     }
 
     /**
@@ -41,30 +37,6 @@ class PuiSearchOrchestratorService
      * @param array<string,mixed> $body
      */
     public function ejecutarFases1y2(string $requestId, array $body, string $id, bool $esPrueba, string $institucionId): void
-    {
-        try {
-            $this->doEjecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
-        } catch (PuiOutboundTimeoutException $e) {
-            throw $e;
-        } catch (DatabaseUnavailableException $e) {
-            throw $e;
-        } catch (\Throwable $e) {
-            PuiLogger::error($requestId, 'oracle_error', [
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'trace' => $e->getTraceAsString(),
-                'payload' => $this->sanitizeBodyForLog($body),
-                'id_reporte' => $id,
-                'exception_class' => \get_class($e),
-            ]);
-            throw $e;
-        }
-    }
-
-    /**
-     * @param array<string,mixed> $body
-     */
-    private function doEjecutarFases1y2(string $requestId, array $body, string $id, bool $esPrueba, string $institucionId): void
     {
         $outbound = PuiOutboundFactory::create($esPrueba);
         $fragmento = $this->fragmentoNombreDesdeActivar($body);
@@ -156,11 +128,6 @@ class PuiSearchOrchestratorService
             throw new \RuntimeException('Payload busqueda-finalizada inválido: ' . implode('; ', $verr));
         }
         $rbf = $outbound->busquedaFinalizada($bf);
-        PuiLogger::info($requestId, 'busqueda_finalizada_response', [
-            'id_reporte' => $id,
-            'http_status' => (int) ($rbf['http_status'] ?? 0),
-            'body' => $rbf['body'] ?? null,
-        ]);
         $this->coincidencias->registrarCoincidencia([
             'evento' => 'busqueda_finalizada',
             'reporte_id' => $id,
@@ -176,13 +143,6 @@ class PuiSearchOrchestratorService
             $this->reportesActivos->marcarFechaFinFase2($id);
         }
         if ($rbf['http_status'] < 200 || $rbf['http_status'] >= 300) {
-            $code = (int) ($rbf['http_status'] ?? 0);
-            if ($code === 401) {
-                PuiLogger::warning($requestId, 'busqueda_finalizada_auth_error', ['id_reporte' => $id, 'response' => $rbf['body'] ?? null]);
-            } elseif ($code >= 500) {
-                PuiLogger::error($requestId, 'busqueda_finalizada_remote_failure', ['id_reporte' => $id, 'response' => $rbf['body'] ?? null]);
-            }
-            $this->jobs->encolarResync('busqueda-finalizada', $id, $bf, 5, $requestId);
             $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
             if ($abort === '1' || $abort === 1 || $abort === true) {
                 throw new \RuntimeException('busqueda-finalizada HTTP ' . $rbf['http_status']);
@@ -191,27 +151,6 @@ class PuiSearchOrchestratorService
     }
 
     public function ejecutarFase3PorReporte(string $requestId, string $idReporte, bool $esPrueba): void
-    {
-        try {
-            $this->doEjecutarFase3PorReporte($requestId, $idReporte, $esPrueba);
-        } catch (PuiOutboundTimeoutException $e) {
-            throw $e;
-        } catch (DatabaseUnavailableException $e) {
-            throw $e;
-        } catch (\Throwable $e) {
-            PuiLogger::error($requestId, 'oracle_error', [
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'trace' => $e->getTraceAsString(),
-                'payload' => ['id_reporte' => $idReporte, 'es_prueba' => $esPrueba],
-                'id_reporte' => $idReporte,
-                'exception_class' => \get_class($e),
-            ]);
-            throw $e;
-        }
-    }
-
-    private function doEjecutarFase3PorReporte(string $requestId, string $idReporte, bool $esPrueba): void
     {
         $reporte = $this->reportesActivos->obtener($idReporte);
         if ($reporte === null) {
@@ -341,11 +280,6 @@ class PuiSearchOrchestratorService
         }
 
         $r = $outbound->notificarCoincidencia($payload);
-        PuiLogger::info($requestId, 'notificar_coincidencia_response', [
-            'id_reporte' => $reporteId,
-            'http_status' => (int) ($r['http_status'] ?? 0),
-            'body' => $r['body'] ?? null,
-        ]);
         $this->coincidencias->registrarCoincidencia([
             'evento' => 'notificar_coincidencia',
             'reporte_id' => $reporteId,
@@ -361,7 +295,6 @@ class PuiSearchOrchestratorService
             throw new PuiOutboundTimeoutException('notificar-coincidencia timeout');
         }
         if ($r['http_status'] < 200 || $r['http_status'] >= 300) {
-            $this->jobs->encolarResync('notificar-coincidencia', $reporteId, $payload, 5, $requestId);
             $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
             if ($abort === '1' || $abort === 1 || $abort === true) {
                 throw new \RuntimeException('notificar-coincidencia HTTP ' . $r['http_status']);
@@ -381,24 +314,5 @@ class PuiSearchOrchestratorService
         ];
         $parts = array_filter($parts, static fn ($x) => $x !== '');
         return $parts !== [] ? implode(' ', $parts) : '';
-    }
-
-    /**
-     * @param array<string,mixed> $body
-     * @return array<string,mixed>
-     */
-    private function sanitizeBodyForLog(array $body): array
-    {
-        $out = $body;
-        if (isset($out['curp']) && \is_string($out['curp'])) {
-            $c = $out['curp'];
-            $len = strlen($c);
-            if ($len > 4) {
-                $out['curp'] = substr($c, 0, 2) . '***' . substr($c, -2);
-            } else {
-                $out['curp'] = '***';
-            }
-        }
-        return $out;
     }
 }

@@ -3,12 +3,14 @@
 namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
-use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\HttpPuiOutboundClient;
 use App\Pui\Integration\PuiOutboundTimeoutException;
+use App\Pui\Repository\PuiCoincidenciaMemoryRepository;
 use App\Pui\Repository\PuiCoincidenciaOracleRepository;
+use App\Pui\Repository\PuiJobMemoryRepository;
 use App\Pui\Repository\PuiJobOracleRepository;
+use App\Pui\Repository\PuiReporteActivoMemoryRepository;
 use App\Pui\Repository\PuiReporteActivoOracleRepository;
 use App\Pui\Validation\ManualValidators;
 use App\Pui\Validation\PuiManualPayloadValidator;
@@ -23,10 +25,10 @@ class PuiReporteService
     public const TIPO_F2 = 'Búsqueda fase 2 - histórica';
     public const TIPO_F3 = 'Búsqueda fase 3 - continua';
 
-    private PuiReporteActivoOracleRepository $estado;
-    private PuiCoincidenciaOracleRepository $coincidencias;
+    private PuiReporteActivoOracleRepository|PuiReporteActivoMemoryRepository $estado;
+    private PuiCoincidenciaOracleRepository|PuiCoincidenciaMemoryRepository $coincidencias;
     private PuiSearchOrchestratorService $orchestrator;
-    private PuiJobOracleRepository $jobs;
+    private PuiJobOracleRepository|PuiJobMemoryRepository $jobs;
 
     public function __construct(
         ?PuiReporteActivoOracleRepository $estado = null,
@@ -34,6 +36,17 @@ class PuiReporteService
         ?PuiSearchOrchestratorService $orchestrator = null,
         ?PuiJobOracleRepository $jobs = null
     ) {
+        if (PuiConfig::isSimulationMode()) {
+            $memEstado = new PuiReporteActivoMemoryRepository();
+            $memCoin = new PuiCoincidenciaMemoryRepository();
+            $memJobs = new PuiJobMemoryRepository();
+            $this->estado = $memEstado;
+            $this->coincidencias = $memCoin;
+            $this->jobs = $memJobs;
+            $this->orchestrator = $orchestrator ?? new PuiSearchOrchestratorService(null, $memCoin, $memEstado);
+            return;
+        }
+
         $this->estado = $estado ?? new PuiReporteActivoOracleRepository();
         $this->coincidencias = $coincidencias ?? new PuiCoincidenciaOracleRepository();
         $this->orchestrator = $orchestrator ?? new PuiSearchOrchestratorService(null, $this->coincidencias, $this->estado);
@@ -69,17 +82,29 @@ class PuiReporteService
         $id = trim((string) $body['id']);
         try {
             return $this->ejecutarPipelineActivacion($requestId, $body, $esPrueba, $id);
-        } catch (DatabaseUnavailableException $e) {
-            throw $e;
         } catch (PuiOutboundTimeoutException $e) {
             $this->marcarEstado($id, 'ERROR');
             return $this->err($requestId, 504, 'PUI-EXT-504', 'Tiempo de espera agotado al contactar la PUI.');
         } catch (\InvalidArgumentException $e) {
             $this->marcarEstado($id, 'ERROR');
             return $this->err($requestId, 400, 'PUI-VAL-400', $e->getMessage());
+        } catch (\PDOException $e) {
+            PuiLogger::error($requestId, 'activar_pdo', ['msg' => $e->getMessage()]);
+            try {
+                $this->marcarEstado($id, 'ERROR');
+            } catch (\Throwable $ignored) {
+            }
+            return $this->err($requestId, 503, 'PUI-DB-503', 'Servicio de datos no disponible.');
         } catch (\RuntimeException $e) {
             $this->marcarEstado($id, 'ERROR');
             return $this->err($requestId, 502, 'PUI-EXT-502', 'Fallo al notificar a la PUI.', $e->getMessage());
+        } catch (\Throwable $e) {
+            PuiLogger::error($requestId, 'activar_exception', ['class' => get_class($e), 'msg' => $e->getMessage()]);
+            try {
+                $this->marcarEstado($id, 'ERROR');
+            } catch (\Throwable $ignored) {
+            }
+            return $this->err($requestId, 503, 'PUI-DB-503', 'Servicio de datos no disponible.');
         }
     }
 
@@ -116,7 +141,7 @@ class PuiReporteService
         ]);
 
         $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
-        $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
+        $this->jobs->programarFase3($id, $esPrueba, 15);
         $this->kickFase3RunnerDaemon();
 
         $this->marcarEstado($id, 'ACTIVO');

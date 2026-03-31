@@ -6,9 +6,15 @@ use App\Pui\Config\PuiConfig;
 
 class PuiOutboundFactory
 {
-    public static function create(bool $forzarPruebaMock = false): PuiOutboundClientInterface
+    /**
+     * @param bool $esPrueba reservado para futuras ramas (p. ej. trazas); el mock solo aplica en modo simulación.
+     */
+    public static function create(bool $esPrueba = false): PuiOutboundClientInterface
     {
-        // En cumplimiento estricto no se permiten fallback ni mocks silenciosos.
+        // Manual Técnico — modo simulación (MOCK): sin llamadas HTTP salientes a la PUI (§7.2–7.3).
+        if (PuiConfig::isSimulationMode()) {
+            return new MockPuiOutboundClient();
+        }
         PuiConfig::assertRealIntegrationReady();
         return new HttpPuiOutboundClient();
     }

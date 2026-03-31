@@ -4,3 +4,6 @@
 *.log
 /.env
 /App/storage/pui/rate_limit.json
+# Manual institucional (no versionar)
+Manual*.pdf
+Manual*.docx
