@@ -39,18 +39,16 @@ class Database
         try {
             $this->db_activa =  new PDO($cadena, $usuario, $password);
         } catch (\PDOException $e) {
-            // Log full oracle connect error and rethrow as DatabaseUnavailableException so
-            // upper layers (front controller / index) decide the HTTP response.
             error_log('[PUI][DEBUG] entering DB exception catch');
             $pdoInfo = $e->errorInfo ?? null;
-            PuiLogger::error(PuiLogger::requestContextId(), 'oracle_connect_error', [
+            PuiLogger::error(PuiLogger::requestContextId(), 'oracle_error', [
                 'message' => $e->getMessage(),
                 'code' => $e->getCode(),
                 'trace' => $e->getTraceAsString(),
                 'source' => 'Core\\Database::Conecta',
                 'pdo_error_info' => $pdoInfo,
             ]);
-            throw new \\App\\Pui\\Exception\\DatabaseUnavailableException('PUI-DB-503', 0, $e);
+            self::baseNoDisponible();
         }
     }
 

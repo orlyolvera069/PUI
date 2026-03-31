@@ -38,23 +38,6 @@ class PuiFrontController
         $path = $this->normalizePath();
 
         try {
-            // Health check endpoint: unauthenticated, debe devolver 200 si DB disponible,
-            // o 503 PUI-DB-503 si Oracle no está disponible (según manual).
-            if ($method === 'GET' && $path === '/salud') {
-                try {
-                    // Intentar conectar a BD; Database lanzará DatabaseUnavailableException si falla.
-                    $db = new \Core\Database();
-                    $this->sendRaw(200, [
-                        'meta' => ['requestId' => $requestId, 'timestamp' => gmdate('c')],
-                        'status' => 'ok',
-                    ]);
-                    return;
-                } catch (\App\Pui\Exception\DatabaseUnavailableException $e) {
-                    // Mantener contrato: 503 PUI-DB-503 sin exponer detalles.
-                    $this->emitError($requestId, 503, 'PUI-DB-503', 'Servicio de base de datos no disponible.', null);
-                    return;
-                }
-            }
             if ($this->isRateLimitExceeded($method, $path)) {
                 PuiLogger::warning($requestId, 'rate_limit_exceeded', ['path' => $path, 'method' => $method]);
                 $this->emitError($requestId, 429, 'PUI-HTTP-429', 'Too Many Requests');
