@@ -9,27 +9,73 @@ namespace App\Pui\Validation;
  */
 class PuiManualPayloadValidator
 {
+    private static function hasString(array $p, string $key): bool
+    {
+        return array_key_exists($key, $p) && is_string($p[$key]);
+    }
+
+    private static function isOptionalStringFieldValid(array $p, string $key, callable $validator): bool
+    {
+        if (!array_key_exists($key, $p)) {
+            return true;
+        }
+        if (!is_string($p[$key])) {
+            return false;
+        }
+        $v = $p[$key];
+        if ($v === '') {
+            return true;
+        }
+        return (bool) $validator($v);
+    }
+
     /** §7.2 Notificar coincidencia — campos obligatorios: curp, lugar_nacimiento, id, institucion_id, fase_busqueda */
     public static function notificarCoincidencia(array $p): array
     {
         $e = [];
-        if (empty($p['curp']) || !ManualValidators::curpOficial((string) $p['curp'])) {
+        $allowed = [
+            'curp',
+            'nombre_completo',
+            'fecha_nacimiento',
+            'lugar_nacimiento',
+            'sexo_asignado',
+            'telefono',
+            'correo',
+            'domicilio',
+            'fotos',
+            'formato_fotos',
+            'huellas',
+            'formato_huellas',
+            'id',
+            'institucion_id',
+            'tipo_evento',
+            'fecha_evento',
+            'descripcion_lugar_evento',
+            'direccion_evento',
+            'fase_busqueda',
+        ];
+        foreach (array_keys($p) as $k) {
+            if (!in_array((string) $k, $allowed, true)) {
+                $e[] = 'campo no permitido en notificar-coincidencia: ' . $k;
+            }
+        }
+        if (!self::hasString($p, 'curp') || $p['curp'] === '' || !ManualValidators::curpOficial($p['curp'])) {
             $e[] = 'curp obligatorio, 18 caracteres, ^[A-Z0-9]{18}$';
         }
-        if (empty($p['lugar_nacimiento']) || !ManualValidators::lugarNacimientoValor((string) $p['lugar_nacimiento'])) {
+        if (!self::hasString($p, 'lugar_nacimiento') || $p['lugar_nacimiento'] === '' || !ManualValidators::lugarNacimientoValor($p['lugar_nacimiento'])) {
             $e[] = 'lugar_nacimiento obligatorio, máx. 20 caracteres (Anexo 5 o DESCONOCIDO)';
         }
-        if (empty($p['id']) || !ManualValidators::idBusqueda((string) $p['id'])) {
+        if (!self::hasString($p, 'id') || $p['id'] === '' || !ManualValidators::idBusqueda($p['id'])) {
             $e[] = 'id obligatorio, formato <FUB>-<UUID4>, longitud 36–75';
         }
-        if (empty($p['institucion_id']) || !ManualValidators::institucionId((string) $p['institucion_id'])) {
+        if (!self::hasString($p, 'institucion_id') || $p['institucion_id'] === '' || !ManualValidators::institucionId($p['institucion_id'])) {
             $e[] = 'institucion_id obligatorio, RFC 4–13, ^[A-Z0-9]{4,13}$';
         }
-        if (!isset($p['fase_busqueda']) || !ManualValidators::faseBusquedaCadena((string) $p['fase_busqueda'])) {
+        if (!self::hasString($p, 'fase_busqueda') || !ManualValidators::faseBusquedaCadena($p['fase_busqueda'])) {
             $e[] = 'fase_busqueda obligatorio, cadena "1", "2" o "3"';
         }
 
-        $fase = isset($p['fase_busqueda']) ? (string) $p['fase_busqueda'] : '';
+        $fase = self::hasString($p, 'fase_busqueda') ? $p['fase_busqueda'] : '';
         $includeEventFields = $fase !== '1';
 
         // Manual: fase 1 omite tipo_evento/fecha_evento/descripcion_lugar_evento/direccion_evento.
@@ -50,17 +96,22 @@ class PuiManualPayloadValidator
             }
         }
 
-        // nombre_completo (se valida estrictamente cuando se incluye; en esta integración se envía siempre).
-        if (!isset($p['nombre_completo']) || !is_array($p['nombre_completo'])) {
-            $e[] = 'nombre_completo debe ser objeto JSON';
-        } else {
+        // nombre_completo es opcional en §7.2; si viene, debe cumplir estructura.
+        if (isset($p['nombre_completo'])) {
+            if (!is_array($p['nombre_completo'])) {
+                $e[] = 'nombre_completo debe ser objeto JSON';
+            } else {
             $nc = $p['nombre_completo'];
             foreach (['nombre', 'primer_apellido', 'segundo_apellido'] as $k) {
                 if (!array_key_exists($k, $nc)) {
                     $e[] = 'nombre_completo.' . $k . ' es obligatorio';
                     continue;
                 }
-                $v = (string) $nc[$k];
+                if (!is_string($nc[$k])) {
+                    $e[] = 'nombre_completo.' . $k . ' debe ser cadena';
+                    continue;
+                }
+                $v = $nc[$k];
                 if (strlen($v) < 1 || strlen($v) > 50) {
                     $e[] = 'nombre_completo.' . $k . ' longitud debe estar en 1..50';
                     continue;
@@ -68,6 +119,7 @@ class PuiManualPayloadValidator
                 if (!preg_match("/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ '\\-]{1,50}$/u", $v)) {
                     $e[] = 'nombre_completo.' . $k . ' no cumple regex manual';
                 }
+            }
             }
         }
 
@@ -92,48 +144,47 @@ class PuiManualPayloadValidator
                 }
             }
             // Regex de manual para campos; se evalúa sólo si la clave existe.
-            if (isset($obj['direccion']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,500}$/u', (string) $obj['direccion'])) {
+            if (isset($obj['direccion']) && (!is_string($obj['direccion']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,500}$/u', $obj['direccion']))) {
                 $e[] = $label . '.direccion no cumple regex manual';
             }
-            if (isset($obj['calle']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,50}$/u', (string) $obj['calle'])) {
+            if (isset($obj['calle']) && (!is_string($obj['calle']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,50}$/u', $obj['calle']))) {
                 $e[] = $label . '.calle no cumple regex manual';
             }
-            if (isset($obj['numero']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,20}$/u', (string) $obj['numero'])) {
+            if (isset($obj['numero']) && (!is_string($obj['numero']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,20}$/u', $obj['numero']))) {
                 $e[] = $label . '.numero no cumple regex manual';
             }
-            if (isset($obj['colonia']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,50}$/u', (string) $obj['colonia'])) {
+            if (isset($obj['colonia']) && (!is_string($obj['colonia']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,50}$/u', $obj['colonia']))) {
                 $e[] = $label . '.colonia no cumple regex manual';
             }
-            if (isset($obj['codigo_postal']) && !preg_match('/^\\d{0,5}$/', (string) $obj['codigo_postal'])) {
+            if (isset($obj['codigo_postal']) && (!is_string($obj['codigo_postal']) || !preg_match('/^\\d{0,5}$/', $obj['codigo_postal']))) {
                 $e[] = $label . '.codigo_postal no cumple regex manual';
             }
-            if (isset($obj['municipio_o_alcaldia']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,100}$/u', (string) $obj['municipio_o_alcaldia'])) {
+            if (isset($obj['municipio_o_alcaldia']) && (!is_string($obj['municipio_o_alcaldia']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,100}$/u', $obj['municipio_o_alcaldia']))) {
                 $e[] = $label . '.municipio_o_alcaldia no cumple regex manual';
             }
-            if (isset($obj['entidad_federativa']) && !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,40}$/u', (string) $obj['entidad_federativa'])) {
+            if (isset($obj['entidad_federativa']) && (!is_string($obj['entidad_federativa']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,40}$/u', $obj['entidad_federativa']))) {
                 $e[] = $label . '.entidad_federativa no cumple regex manual';
             }
         };
 
-        if (!isset($p['domicilio'])) {
-            $e[] = 'domicilio es obligatorio';
-        } else {
+        // domicilio es opcional en §7.2; si viene, validar estructura/regex.
+        if (array_key_exists('domicilio', $p)) {
             $validateDomicilio($p['domicilio'], 'domicilio');
         }
-        if ($includeEventFields && isset($p['direccion_evento'])) {
+        if ($includeEventFields && array_key_exists('direccion_evento', $p)) {
             $validateDomicilio($p['direccion_evento'], 'direccion_evento');
         }
 
-        if (isset($p['fecha_nacimiento']) && (string) $p['fecha_nacimiento'] !== '' && !ManualValidators::fechaIso8601((string) $p['fecha_nacimiento'])) {
+        if (!self::isOptionalStringFieldValid($p, 'fecha_nacimiento', static fn(string $v): bool => ManualValidators::fechaIso8601($v))) {
             $e[] = 'fecha_nacimiento debe ser YYYY-MM-DD';
         }
-        if (isset($p['fecha_evento']) && (string) $p['fecha_evento'] !== '' && !ManualValidators::fechaIso8601((string) $p['fecha_evento'])) {
+        if (!self::isOptionalStringFieldValid($p, 'fecha_evento', static fn(string $v): bool => ManualValidators::fechaIso8601($v))) {
             $e[] = 'fecha_evento debe ser YYYY-MM-DD';
         }
-        if (isset($p['sexo_asignado']) && (string) $p['sexo_asignado'] !== '' && !preg_match('/^[MHX]$/', (string) $p['sexo_asignado'])) {
+        if (!self::isOptionalStringFieldValid($p, 'sexo_asignado', static fn(string $v): bool => (bool) preg_match('/^[MHX]$/', $v))) {
             $e[] = 'sexo_asignado debe ser H, M o X';
         }
-        if (isset($p['descripcion_lugar_evento']) && strlen((string) $p['descripcion_lugar_evento']) > 500) {
+        if (array_key_exists('descripcion_lugar_evento', $p) && (!is_string($p['descripcion_lugar_evento']) || strlen($p['descripcion_lugar_evento']) > 500)) {
             $e[] = 'descripcion_lugar_evento máx. 500 caracteres';
         }
 
@@ -144,10 +195,16 @@ class PuiManualPayloadValidator
     public static function busquedaFinalizada(array $p): array
     {
         $e = [];
-        if (empty($p['id']) || !ManualValidators::idBusqueda((string) $p['id'])) {
+        $allowed = ['id', 'institucion_id'];
+        foreach (array_keys($p) as $k) {
+            if (!in_array((string) $k, $allowed, true)) {
+                $e[] = 'campo no permitido en busqueda-finalizada: ' . $k;
+            }
+        }
+        if (!self::hasString($p, 'id') || $p['id'] === '' || !ManualValidators::idBusqueda($p['id'])) {
             $e[] = 'id obligatorio, formato y longitud según manual';
         }
-        if (empty($p['institucion_id']) || !ManualValidators::institucionId((string) $p['institucion_id'])) {
+        if (!self::hasString($p, 'institucion_id') || $p['institucion_id'] === '' || !ManualValidators::institucionId($p['institucion_id'])) {
             $e[] = 'institucion_id obligatorio';
         }
         return $e;
@@ -179,38 +236,37 @@ class PuiManualPayloadValidator
             'codigo_postal',
             'municipio_o_alcaldia',
             'entidad_federativa',
-            'rfc_criterio',
         ];
         foreach (array_keys($p) as $k) {
             if (!in_array((string) $k, $allowed, true)) {
                 $e[] = 'campo no permitido en activar-reporte: ' . $k;
             }
         }
-        if (empty($p['id']) || !ManualValidators::idBusqueda((string) $p['id'])) {
+        if (!self::hasString($p, 'id') || $p['id'] === '' || !ManualValidators::idBusqueda($p['id'])) {
             $e[] = 'id obligatorio';
         }
-        if (empty($p['curp']) || !ManualValidators::curpOficial((string) $p['curp'])) {
+        if (!self::hasString($p, 'curp') || $p['curp'] === '' || !ManualValidators::curpOficial($p['curp'])) {
             $e[] = 'curp obligatorio';
         }
-        if (!isset($p['lugar_nacimiento']) || trim((string) $p['lugar_nacimiento']) === '') {
+        if (!self::hasString($p, 'lugar_nacimiento') || trim($p['lugar_nacimiento']) === '') {
             $e[] = 'lugar_nacimiento obligatorio';
-        } elseif (!ManualValidators::lugarNacimientoValor((string) $p['lugar_nacimiento'])) {
+        } elseif (!ManualValidators::lugarNacimientoValor($p['lugar_nacimiento'])) {
             $e[] = 'lugar_nacimiento longitud inválida (máx. 20)';
         }
-        if (isset($p['fecha_nacimiento']) && (string) $p['fecha_nacimiento'] !== '' && !ManualValidators::fechaIso8601((string) $p['fecha_nacimiento'])) {
+        if (!self::isOptionalStringFieldValid($p, 'fecha_nacimiento', static fn(string $v): bool => ManualValidators::fechaIso8601($v))) {
             $e[] = 'fecha_nacimiento formato YYYY-MM-DD';
         }
-        if (isset($p['fecha_desaparicion']) && (string) $p['fecha_desaparicion'] !== '' && !ManualValidators::fechaIso8601((string) $p['fecha_desaparicion'])) {
+        if (!self::isOptionalStringFieldValid($p, 'fecha_desaparicion', static fn(string $v): bool => ManualValidators::fechaIso8601($v))) {
             $e[] = 'fecha_desaparicion formato YYYY-MM-DD';
         }
 
         foreach (['nombre', 'primer_apellido', 'segundo_apellido', 'telefono', 'correo'] as $k) {
-            if (isset($p[$k]) && (string) $p[$k] !== '' && !ManualValidators::seguridadCiber10TextoLibre((string) $p[$k])) {
+            if (!self::isOptionalStringFieldValid($p, $k, static fn(string $v): bool => ManualValidators::seguridadCiber10TextoLibre($v))) {
                 $e[] = $k . ' contiene caracteres no permitidos (§10 ciberseguridad)';
             }
         }
-        foreach (['direccion', 'calle', 'numero', 'colonia', 'codigo_postal', 'municipio_o_alcaldia', 'entidad_federativa', 'rfc_criterio'] as $k) {
-            if (isset($p[$k]) && (string) $p[$k] !== '' && !ManualValidators::seguridadCiber10Domicilio((string) $p[$k])) {
+        foreach (['direccion', 'calle', 'numero', 'colonia', 'codigo_postal', 'municipio_o_alcaldia', 'entidad_federativa'] as $k) {
+            if (!self::isOptionalStringFieldValid($p, $k, static fn(string $v): bool => ManualValidators::seguridadCiber10Domicilio($v))) {
                 $e[] = $k . ' contiene caracteres no permitidos (§10 ciberseguridad)';
             }
         }
@@ -222,7 +278,13 @@ class PuiManualPayloadValidator
     public static function desactivarReporte(array $p): array
     {
         $e = [];
-        if (empty($p['id']) || !ManualValidators::idBusqueda((string) $p['id'])) {
+        $allowed = ['id'];
+        foreach (array_keys($p) as $k) {
+            if (!in_array((string) $k, $allowed, true)) {
+                $e[] = 'campo no permitido en desactivar-reporte: ' . $k;
+            }
+        }
+        if (!self::hasString($p, 'id') || $p['id'] === '' || !ManualValidators::idBusqueda($p['id'])) {
             $e[] = 'id obligatorio';
         }
         return $e;

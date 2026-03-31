@@ -3,6 +3,7 @@
 namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\HttpPuiOutboundClient;
 use App\Pui\Integration\PuiOutboundTimeoutException;
@@ -68,6 +69,8 @@ class PuiReporteService
         $id = trim((string) $body['id']);
         try {
             return $this->ejecutarPipelineActivacion($requestId, $body, $esPrueba, $id);
+        } catch (DatabaseUnavailableException $e) {
+            throw $e;
         } catch (PuiOutboundTimeoutException $e) {
             $this->marcarEstado($id, 'ERROR');
             return $this->err($requestId, 504, 'PUI-EXT-504', 'Tiempo de espera agotado al contactar la PUI.');
@@ -113,7 +116,7 @@ class PuiReporteService
         ]);
 
         $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
-        $this->jobs->programarFase3($id, $esPrueba, 15);
+        $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
         $this->kickFase3RunnerDaemon();
 
         $this->marcarEstado($id, 'ACTIVO');

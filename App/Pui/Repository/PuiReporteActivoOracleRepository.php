@@ -2,6 +2,7 @@
 
 namespace App\Pui\Repository;
 
+use App\Pui\Http\PuiLogger;
 use Core\Database;
 
 class PuiReporteActivoOracleRepository
@@ -13,7 +14,7 @@ class PuiReporteActivoOracleRepository
     {
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para PUI_REPORTES_ACTIVOS.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $sql = <<<SQL
@@ -117,7 +118,7 @@ class PuiReporteActivoOracleRepository
     {
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para desactivar reporte.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $sql = <<<SQL
@@ -143,7 +144,7 @@ class PuiReporteActivoOracleRepository
     {
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para PUI_REPORTES_ACTIVOS.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $sql = <<<SQL
@@ -161,7 +162,7 @@ class PuiReporteActivoOracleRepository
     {
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para PUI_REPORTES_ACTIVOS.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $sql = <<<SQL

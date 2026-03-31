@@ -2,6 +2,8 @@
 
 namespace App\Pui\Repository;
 
+use App\Pui\Http\PuiJsonResponse;
+use App\Pui\Http\PuiLogger;
 use Core\Database;
 use PDO;
 
@@ -20,7 +22,7 @@ class PuiJwtTokenOracleRepository
 
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para validar JWT.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $expEpoch = max($expEpoch, time() + 60);
@@ -37,10 +39,19 @@ class PuiJwtTokenOracleRepository
                 'exp_at' => $expAt,
             ]);
         } catch (\PDOException $e) {
-            // ORA-00001 (unique) = token reutilizado.
             $msg = $e->getMessage();
             if (strpos($msg, 'ORA-00001') !== false) {
                 return false;
+            }
+            if (PuiJsonResponse::isConnectionOrLinkFailure($e)) {
+                PuiLogger::error(PuiLogger::requestContextId(), 'oracle_error', [
+                    'message' => $e->getMessage(),
+                    'code' => $e->getCode(),
+                    'trace' => $e->getTraceAsString(),
+                    'source' => 'PuiJwtTokenOracleRepository::consumeJti',
+                    'pdo_error_info' => $e->errorInfo ?? null,
+                ]);
+                PuiLogger::throwDatabaseUnavailable($e);
             }
             throw new \RuntimeException('No se pudo registrar consumo de JWT.');
         }

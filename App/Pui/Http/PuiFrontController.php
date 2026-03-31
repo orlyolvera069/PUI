@@ -3,9 +3,9 @@
 namespace App\Pui\Http;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Security\PuiAuthService;
 use App\Pui\Security\PuiRateLimiter;
-use App\Pui\Service\PuiConsultaService;
 use App\Pui\Service\PuiLoginService;
 use App\Pui\Service\PuiReporteService;
 
@@ -17,39 +17,44 @@ class PuiFrontController
 {
     private PuiLoginService $login;
     private ?PuiAuthService $auth;
-    private PuiConsultaService $consulta;
     private PuiReporteService $reportes;
 
     public function __construct(
         ?PuiLoginService $login = null,
         ?PuiAuthService $auth = null,
-        ?PuiConsultaService $consulta = null,
         ?PuiReporteService $reportes = null
     )
     {
         $this->login = $login ?? new PuiLoginService();
         $this->auth = $auth;
-        $this->consulta = $consulta ?? new PuiConsultaService();
         $this->reportes = $reportes ?? new PuiReporteService();
     }
 
     public function dispatch(): void
     {
         $requestId = $this->newRequestId();
+        PuiLogger::setRequestContext($requestId);
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $path = $this->normalizePath();
 
         try {
-            if ($method === 'GET' && ($path === '/salud' || $path === '/health')) {
-                $this->sendRaw(200, [
-                    'meta' => ['requestId' => $requestId, 'timestamp' => gmdate('c')],
-                    'servicio' => 'PUI',
-                    'modo_integracion' => PuiConfig::isSimulationMode() ? 'MOCK' : 'REAL',
-                    'base' => PuiConfig::publicBase(),
-                ]);
-                return;
+            // Health check endpoint: unauthenticated, debe devolver 200 si DB disponible,
+            // o 503 PUI-DB-503 si Oracle no está disponible (según manual).
+            if ($method === 'GET' && $path === '/salud') {
+                try {
+                    // Intentar conectar a BD; Database lanzará DatabaseUnavailableException si falla.
+                    $db = new \Core\Database();
+                    $this->sendRaw(200, [
+                        'meta' => ['requestId' => $requestId, 'timestamp' => gmdate('c')],
+                        'status' => 'ok',
+                    ]);
+                    return;
+                } catch (\App\Pui\Exception\DatabaseUnavailableException $e) {
+                    // Mantener contrato: 503 PUI-DB-503 sin exponer detalles.
+                    $this->emitError($requestId, 503, 'PUI-DB-503', 'Servicio de base de datos no disponible.', null);
+                    return;
+                }
             }
-
             if ($this->isRateLimitExceeded($method, $path)) {
                 PuiLogger::warning($requestId, 'rate_limit_exceeded', ['path' => $path, 'method' => $method]);
                 $this->emitError($requestId, 429, 'PUI-HTTP-429', 'Too Many Requests');
@@ -62,10 +67,18 @@ class PuiFrontController
                     return;
                 }
                 $body = $this->readJsonBody();
+                $unknown = $this->unknownKeys($body, ['usuario', 'clave']);
                 $missing = $this->missingKeys($body, ['usuario', 'clave']);
-                if ($body === [] || $missing !== []) {
+                if ($body === [] || $missing !== [] || $unknown !== []) {
                     $detalle = $missing !== [] ? ('Faltan campos: ' . implode(', ', $missing)) : 'JSON inválido o vacío.';
+                    if ($unknown !== []) {
+                        $detalle = 'Campos no permitidos: ' . implode(', ', $unknown);
+                    }
                     $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', $detalle);
+                    return;
+                }
+                if (!is_string($body['usuario']) || !is_string($body['clave'])) {
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'usuario y clave deben ser cadenas.');
                     return;
                 }
                 $r = $this->login->login($body);
@@ -77,6 +90,11 @@ class PuiFrontController
 
             $jwtPayload = $this->requireJwt($requestId);
             if ($jwtPayload === null) {
+                return;
+            }
+
+            if ($method === 'POST' && !$this->isJsonRequest()) {
+                $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'Content-Type debe ser application/json.');
                 return;
             }
 
@@ -121,25 +139,6 @@ class PuiFrontController
                 $this->sendRaw($r['status'], $r['body']);
                 return;
             }
-            if ($method === 'POST' && $path === '/busqueda') {
-                if (!$this->isAuxBusquedaEnabled()) {
-                    $this->emitError($requestId, 404, 'PUI-HTTP-404', 'Ruta auxiliar deshabilitada.');
-                    return;
-                }
-                $r = $this->consulta->busquedaGeneral($requestId, $body);
-                $this->sendRaw($r['status'], $r['body']);
-                return;
-            }
-            if ($method === 'GET' && preg_match('#^/persona/([A-Za-z0-9]{18})$#', $path, $m)) {
-                if (!$this->isAuxPersonaEnabled()) {
-                    $this->emitError($requestId, 404, 'PUI-HTTP-404', 'Ruta auxiliar deshabilitada.');
-                    return;
-                }
-                $r = $this->consulta->getPersonaByCurp($requestId, $m[1]);
-                $this->sendRaw($r['status'], $r['body']);
-                return;
-            }
-
             if ($this->isKnownRoute($path)) {
                 PuiLogger::warning($requestId, 'method_not_allowed', ['path' => $path, 'method' => $method]);
                 $this->emitError($requestId, 405, 'PUI-HTTP-405', 'Method Not Allowed');
@@ -149,6 +148,9 @@ class PuiFrontController
             PuiLogger::warning($requestId, 'route_not_found', ['path' => $path, 'method' => $method]);
             $this->emitError($requestId, 404, 'PUI-HTTP-404', 'Ruta no definida para el módulo PUI.');
         } catch (\Throwable $e) {
+            if ($e instanceof DatabaseUnavailableException) {
+                throw $e;
+            }
             PuiLogger::error($requestId, 'exception', ['msg' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             throw $e;
         }
@@ -239,33 +241,28 @@ class PuiFrontController
         return $missing;
     }
 
-    private function isAuxPersonaEnabled(): bool
+    private function unknownKeys(array $body, array $keys): array
     {
-        $v = PuiConfig::get('PUI_ENABLE_AUX_PERSONA', '1');
-        return $v === true || $v === 1 || $v === '1';
-    }
-
-    private function isAuxBusquedaEnabled(): bool
-    {
-        $v = PuiConfig::get('PUI_ENABLE_AUX_BUSQUEDA', '1');
-        return $v === true || $v === 1 || $v === '1';
+        $unknown = [];
+        foreach (array_keys($body) as $k) {
+            if (!in_array((string) $k, $keys, true)) {
+                $unknown[] = (string) $k;
+            }
+        }
+        return $unknown;
     }
 
     private function isKnownRoute(string $path): bool
     {
         if (in_array($path, [
-            '/salud',
-            '/health',
             '/login',
             '/activar-reporte',
             '/activar-reporte-prueba',
             '/desactivar-reporte',
-            '/busqueda',
         ], true)) {
             return true;
         }
-
-        return (bool) preg_match('#^/persona/([A-Za-z0-9]{18})$#', $path);
+        return false;
     }
 
     private function isRateLimitExceeded(string $method, string $path): bool
@@ -291,7 +288,15 @@ class PuiFrontController
         if ($contentType === '') {
             return false;
         }
-        return str_contains($contentType, 'application/json');
+        if (!str_contains($contentType, 'application/json')) {
+            return false;
+        }
+
+        if (preg_match('/;\s*charset\s*=\s*([a-z0-9._-]+)/i', $contentType, $m)) {
+            return strtolower(trim($m[1])) === 'utf-8';
+        }
+
+        return true;
     }
 
     /** @param array<string,mixed> $body */

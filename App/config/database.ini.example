@@ -2,8 +2,10 @@
 ;
 ; Auditoría: el servicio PUI debe usar el usuario Oracle dedicado (p. ej. PUI) y tablas propias
 ; en ese esquema; la contraseña solo en entorno / database.ini.
-; ESQUEMA = nombre del servicio en el listener (cadena oci:dbname=//HOST:1521/ESQUEMA), no el nombre
-; lógico del usuario si difiere.
+; ESQUEMA = SERVICE_NAME que expone el listener (Easy Connect: //HOST:PUERTO/SERVICE).
+; No es el nombre del usuario Oracle. Si ORA-12514, el servicio no existe en el listener: use el nombre
+; correcto (p. ej. ORCL, FREEPDB1, nombre del PDB) — ver "lsnrctl services" o preguntar al DBA.
+; PUERTO: Core/Database.php (por defecto 1521 si falta o es inválido).
 
 SERVIDOR  = host.oracle
 PUERTO    = 1521

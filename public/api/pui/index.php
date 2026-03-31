@@ -7,7 +7,6 @@
  *   POST /api/pui/activar-reporte
  *   POST /api/pui/activar-reporte-prueba
  *   POST /api/pui/desactivar-reporte
- *   GET  /api/pui/salud
  *
  * Salida hacia la PUI (cliente HTTP): notificar-coincidencia, busqueda-finalizada (ver pui.ini).
  */
@@ -18,13 +17,18 @@ ob_start();
 
 error_reporting(E_ALL);
 ini_set('display_errors', '0');
+ini_set('log_errors', '1');
 
 define('PROJECTPATH', dirname(__DIR__, 3));
 define('APPPATH', PROJECTPATH . '/App');
+if (!defined('PUI_API_JSON')) {
+    define('PUI_API_JSON', true);
+}
 
 require_once PROJECTPATH . '/public/api/pui/autoload_pui.php';
-
 use App\Pui\Http\PuiFrontController;
+// Si Apache redirigió por un error (REDIRECT_STATUS), responder JSON legible.
+\App\Pui\Http\ErrorHandler::manejar();
 
 @header_remove('X-Powered-By');
 @header_remove('Server');
@@ -78,6 +82,9 @@ set_error_handler(static function (int $severity, string $message, string $file,
 
 set_exception_handler(static function (\Throwable $e): void {
     $requestId = bin2hex(random_bytes(16));
+    if ($e instanceof \App\Pui\Exception\DatabaseUnavailableException) {
+        \App\Pui\Http\PuiJsonResponse::sendDatabaseUnavailable($requestId);
+    }
     jsonResponse(puiErrorEnvelope($requestId), 500);
 });
 
@@ -97,6 +104,8 @@ register_shutdown_function(static function (): void {
 try {
     $controller = new PuiFrontController();
     $controller->dispatch();
+} catch (\App\Pui\Exception\DatabaseUnavailableException $e) {
+    jsonResponse(\App\Pui\Http\PuiJsonResponse::databaseUnavailablePayload(bin2hex(random_bytes(16))), 503);
 } catch (\Throwable $e) {
     jsonResponse(puiErrorEnvelope(bin2hex(random_bytes(16))), 500);
 }

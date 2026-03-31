@@ -12,8 +12,8 @@ class ManualValidators
     /** §7.2 y §8.2 — CURP persona desaparecida / no localizada */
     public const REGEX_CURP = '/^[A-Z0-9]{18}$/';
 
-    /** §7.2 / §7.3 / §8.2 — institucion_id como RFC con homoclave */
-    public const REGEX_INSTITUCION_ID = '/^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$/';
+    /** §7.2 — institucion_id: min 4, max 13, ^[A-Z0-9]{4,13}$ */
+    public const REGEX_INSTITUCION_ID = '/^[A-Z0-9]{4,13}$/';
 
     /** §7.2 — fase_busqueda como cadena de un dígito */
     public const REGEX_FASE_BUSQUEDA = '/^[1-3]$/';
@@ -48,7 +48,7 @@ class ManualValidators
     {
         $r = strtoupper(trim($rfc));
         $len = strlen($r);
-        if ($len !== 12 && $len !== 13) {
+        if ($len < 4 || $len > 13) {
             return false;
         }
         return (bool) preg_match(self::REGEX_INSTITUCION_ID, $r);

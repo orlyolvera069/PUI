@@ -2,6 +2,7 @@
 
 namespace App\Pui\Repository;
 
+use App\Pui\Http\PuiLogger;
 use Core\Database;
 
 class PuiCoincidenciaOracleRepository
@@ -13,7 +14,7 @@ class PuiCoincidenciaOracleRepository
     {
         $db = new Database();
         if ($db->db_activa === null) {
-            throw new \RuntimeException('No hay conexión a Oracle para PUI_COINCIDENCIAS.');
+            PuiLogger::throwDatabaseUnavailable();
         }
 
         $payload = $linea['payload_json'] ?? null;
@@ -38,7 +39,7 @@ class PuiCoincidenciaOracleRepository
                 :id_reporte,
                 :fase_busqueda,
                 :tipo_evento,
-                :payload_json,
+                TO_CLOB(:payload_json),
                 :http_status,
                 :request_id,
                 :endpoint,
