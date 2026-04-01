@@ -12,7 +12,7 @@ use App\Pui\Validation\ManualValidators;
 class NotificarCoincidenciaPayloadFactory
 {
     /**
-     * @param array<string,mixed> $row Fila CL (mayúsculas) desde CultivaClienteRepository
+     * @param array<string,mixed> $row Fila padrón (mayúsculas) desde CultivaClienteRepository
      * @return array<string,mixed>
      */
     public static function desdeRegistroCl(
@@ -31,7 +31,10 @@ class NotificarCoincidenciaPayloadFactory
         $lugar = PuiAnexo5LugarNacimiento::desdeCurp($curp);
 
         // Manual permite nombre_completo como objeto opcional, pero en esta integración lo enviamos siempre.
-        $nombre = self::sanitizeNombreCampo((string) ($row['NOMBRE1'] ?? ''));
+        $n1 = trim((string) ($row['NOMBRE1'] ?? ''));
+        $n2 = trim((string) ($row['NOMBRE2'] ?? ''));
+        $nombreRaw = $n1 . ($n2 !== '' ? ' ' . $n2 : '');
+        $nombre = self::sanitizeNombreCampo($nombreRaw);
         $paterno = self::sanitizeNombreCampo((string) ($row['PRIMAPE'] ?? ''));
         $materno = self::sanitizeNombreCampo((string) ($row['SEGAPE'] ?? ''));
 
@@ -84,6 +87,9 @@ class NotificarCoincidenciaPayloadFactory
     {
         // Manual: para evento/domicilio se requiere dirección, calle, número, colonia, código postal, municipio o alcaldía y entidad federativa.
         $calle = self::sanitizeDomicilioTexto((string) ($row['CALLE'] ?? ''), 500);
+        $num = trim((string) ($row['NUMERO'] ?? ''));
+        $numSan = $num !== '' ? self::sanitizeDomicilioTexto($num, 50) : '';
+        $direccionPlano = trim($calle . ($numSan !== '' ? ' ' . $numSan : ''));
         $cp = trim((string) ($row['CODIGO_POSTAL'] ?? ''));
         $colonia = self::sanitizeDomicilioTexto((string) ($row['CDGPAI'] ?? ''), 50);
         $municipio = self::sanitizeDomicilioTexto((string) ($row['CDGMU'] ?? ''), 100);
@@ -91,9 +97,9 @@ class NotificarCoincidenciaPayloadFactory
 
         // Manual regex permite campos con longitud mínima 0, por lo tanto, enviamos siempre claves aunque estén vacías.
         return [
-            'direccion' => self::limitLen($calle, 500), // CALLE -> direccion (requisito)
+            'direccion' => self::limitLen($direccionPlano !== '' ? $direccionPlano : $calle, 500),
             'calle' => self::limitLen($calle, 50),
-            'numero' => '',
+            'numero' => self::limitLen($numSan, 50),
             'colonia' => self::limitLen($colonia, 50),
             'codigo_postal' => preg_match('/^\d{0,5}$/', $cp) ? $cp : '',
             'municipio_o_alcaldia' => self::limitLen($municipio, 100),

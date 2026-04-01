@@ -109,14 +109,18 @@ class PuiSearchOrchestratorService
             $fechaFin = $endStr;
 
             foreach ($this->cl->buscarFase2HistoricaPorNombre($fragmento, 30, $fechaInicio, $fechaFin) as $row) {
+                $tipoEv = trim((string) ($row['TIPO_EVENTO'] ?? ''));
+                $tipoFinal = $tipoEv !== '' ? $tipoEv : PuiReporteService::TIPO_F2;
+                $fechaEv = trim((string) ($row['FECHA_EVENTO'] ?? ''));
+                $fechaFinal = $fechaEv !== '' ? $fechaEv : $endStr;
                 $payload = NotificarCoincidenciaPayloadFactory::desdeRegistroCl(
                     $row,
                     $id,
                     $institucionId,
                     '2',
-                    PuiReporteService::TIPO_F2,
+                    $tipoFinal,
                     true,
-                    $endStr
+                    $fechaFinal
                 );
                 $this->enviarNotificacionValidada($requestId, $id, $institucionId, $outbound, $payload);
             }
@@ -205,14 +209,18 @@ class PuiSearchOrchestratorService
                 // Evitar reprocesar la misma coincidencia en búsqueda continua.
                 continue;
             }
+            $tipoEv = trim((string) ($row['TIPO_EVENTO'] ?? ''));
+            $tipoFinal = $tipoEv !== '' ? $tipoEv : PuiReporteService::TIPO_F3;
+            $fechaEv = trim((string) ($row['FECHA_EVENTO'] ?? ''));
+            $fechaFinal = $fechaEv !== '' ? $fechaEv : gmdate('Y-m-d');
             $payload = NotificarCoincidenciaPayloadFactory::desdeRegistroCl(
                 $row,
                 $idReporte,
                 $institucionId,
                 '3',
-                PuiReporteService::TIPO_F3,
+                $tipoFinal,
                 true,
-                gmdate('Y-m-d')
+                $fechaFinal
             );
             $this->enviarNotificacionValidada($requestId, $idReporte, $institucionId, $outbound, $payload);
             $coincidenciasNotificadas++;

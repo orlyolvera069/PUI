@@ -6,78 +6,127 @@ use App\Pui\Config\PuiConfig;
 use Core\Database;
 
 /**
- * Tabla CL — búsquedas por fase según Manual Técnico PUI (fase 1 básica, 2 histórica, 3 continua).
+ * Padrón Oracle: CLIENTE (datos personales y domicilio en fase 1) y EVENTOS (fases 2 y 3).
+ * Proyección con alias compatibles con NotificarCoincidenciaPayloadFactory (NOMBRE1, PRIMAPE, CDGPAI, …).
  */
 class CultivaClienteRepository
 {
+    /** Califica esquema si PUI_PADRON_SCHEMA está definido (p. ej. ESQ.CLIENTE). */
+    private static function qualify(string $table): string
+    {
+        $sch = trim((string) PuiConfig::get('PUI_PADRON_SCHEMA', ''));
+        if ($sch === '' || !preg_match('/^[A-Z0-9_]+$/i', $sch)) {
+            return $table;
+        }
+
+        return strtoupper($sch) . '.' . $table;
+    }
+
+    private static function normCurpExpr(string $aliasCol): string
+    {
+        return "UPPER(REGEXP_REPLACE(TRIM({$aliasCol}), '[[:space:]]+', ''))";
+    }
+
+    private static function fromCliente(): string
+    {
+        return self::qualify('CLIENTE') . ' C';
+    }
+
+    private static function fromEventosJoinCliente(): string
+    {
+        $cli = self::fromCliente();
+        $ev = self::qualify('EVENTOS') . ' E';
+
+        return "{$ev} INNER JOIN {$cli} ON " . self::normCurpExpr('E.CURP') . ' = ' . self::normCurpExpr('C.CURP');
+    }
+
     /**
-     * Consulta base sobre padrón de clientes (CL). Si la conexión es el usuario Oracle PUI,
-     * puede usarse PUI_PADRON_SCHEMA en pui.ini para calificar tablas del esquema productivo (CL, EF, COL).
+     * Columnas CLIENTE → forma esperada por NotificarCoincidenciaPayloadFactory / PuiConsultaService.
      */
-    private const SELECT_BASE = <<<SQL
-        SELECT
-            CL.CODIGO AS CODIGO_CLIENTE,
-            TRIM(CL.NOMBRE1) AS NOMBRE1,
-            TRIM(CL.NOMBRE2) AS NOMBRE2,
-            TRIM(CL.PRIMAPE) AS PRIMAPE,
-            TRIM(CL.SEGAPE) AS SEGAPE,
-            CONCATENA_NOMBRE(CL.NOMBRE1, CL.NOMBRE2, CL.PRIMAPE, CL.SEGAPE) AS NOMBRE_COMPLETO,
-            CL.RFC AS RFC,
-            TRIM(CL.CURP) AS CURP,
-            TO_CHAR(CL.NACIMIENTO, 'YYYY-MM-DD') AS FECHA_NACIMIENTO,
-            CL.SEXO AS SEXO,
-            TRIM(CL.CALLE) AS CALLE,
-            CL.CDGPAI AS CDGPAI,
-            CL.CDGEF AS CDGEF,
-            CL.CDGMU AS CDGMU,
-            EF.CCC AS CLAVE_ESTADO,
-            EF.NOMBRE AS ESTADO_NOMBRE,
-            COL.CDGPOSTAL AS CODIGO_POSTAL
-        FROM CL
-        LEFT JOIN EF ON CL.CDGEF = EF.CODIGO
-        LEFT JOIN COL ON CL.CDGCOL = COL.CODIGO AND CL.CDGLO = COL.CDGLO AND CL.CDGMU = COL.CDGMU AND CL.CDGEF = COL.CDGEF
-    SQL;
-
-    /** @return string SQL FROM/JOIN calificado si PUI_PADRON_SCHEMA está definido */
-    private static function selectBaseSql(): string
+    private static function selectClienteProyeccion(string $alias = 'C'): string
     {
-        $sch = trim((string) PuiConfig::get('PUI_PADRON_SCHEMA', ''));
-        if ($sch === '' || !preg_match('/^[A-Z0-9_]+$/i', $sch)) {
-            return self::SELECT_BASE;
-        }
-        $s = strtoupper($sch);
-        return str_replace(
-            ['FROM CL', 'LEFT JOIN EF ON', 'LEFT JOIN COL ON'],
-            ["FROM {$s}.CL CL", "LEFT JOIN {$s}.EF EF ON", "LEFT JOIN {$s}.COL COL ON"],
-            self::SELECT_BASE
-        );
+        $c = $alias;
+
+        return <<<SQL
+            {$c}.ID AS CODIGO_CLIENTE,
+            TRIM({$c}.NOMBRE1) AS NOMBRE1,
+            TRIM({$c}.NOMBRE2) AS NOMBRE2,
+            TRIM({$c}.APELLIDO1) AS PRIMAPE,
+            TRIM({$c}.APELLIDO2) AS SEGAPE,
+            TRIM({$c}.NOMBRE1) || ' ' || TRIM(NVL({$c}.NOMBRE2, '')) || ' ' || TRIM(NVL({$c}.APELLIDO1, '')) || ' ' || TRIM(NVL({$c}.APELLIDO2, '')) AS NOMBRE_COMPLETO,
+            CAST(NULL AS VARCHAR2(20)) AS RFC,
+            TRIM({$c}.CURP) AS CURP,
+            TO_CHAR({$c}.FECHA_NACIMIENTO, 'YYYY-MM-DD') AS FECHA_NACIMIENTO,
+            {$c}.SEXO AS SEXO,
+            TRIM({$c}.CALLE) AS CALLE,
+            TRIM({$c}.NUMERO) AS NUMERO,
+            TRIM({$c}.COLONIA) AS CDGPAI,
+            TRIM({$c}.CP) AS CODIGO_POSTAL,
+            TRIM({$c}.MUNICIPIO) AS CDGMU,
+            TRIM({$c}.ENTIDAD_FEDERATIVA) AS ESTADO_NOMBRE
+        SQL;
     }
 
-    /** Fragmento FROM para consultas que solo usan CL (sin EF/COL). */
-    private static function padronClFromClause(): string
+    /** Solo persona (fases 2–3: domicilio del evento viene de EVENTOS). */
+    private static function selectClienteSoloPersona(string $alias = 'C'): string
     {
-        $sch = trim((string) PuiConfig::get('PUI_PADRON_SCHEMA', ''));
-        if ($sch === '' || !preg_match('/^[A-Z0-9_]+$/i', $sch)) {
-            return 'CL';
-        }
-        $s = strtoupper($sch);
-        return "{$s}.CL CL";
+        $c = $alias;
+
+        return <<<SQL
+            {$c}.ID AS CODIGO_CLIENTE,
+            TRIM({$c}.NOMBRE1) AS NOMBRE1,
+            TRIM({$c}.NOMBRE2) AS NOMBRE2,
+            TRIM({$c}.APELLIDO1) AS PRIMAPE,
+            TRIM({$c}.APELLIDO2) AS SEGAPE,
+            TRIM({$c}.NOMBRE1) || ' ' || TRIM(NVL({$c}.NOMBRE2, '')) || ' ' || TRIM(NVL({$c}.APELLIDO1, '')) || ' ' || TRIM(NVL({$c}.APELLIDO2, '')) AS NOMBRE_COMPLETO,
+            CAST(NULL AS VARCHAR2(20)) AS RFC,
+            TRIM({$c}.CURP) AS CURP,
+            TO_CHAR({$c}.FECHA_NACIMIENTO, 'YYYY-MM-DD') AS FECHA_NACIMIENTO,
+            {$c}.SEXO AS SEXO
+        SQL;
     }
 
-    /** Fase 1: coincidencia exacta por CURP (datos básicos). */
+    /** Dirección del evento administrativo (EVENTOS). */
+    private static function selectEventoProyeccion(string $alias = 'E'): string
+    {
+        $e = $alias;
+
+        return <<<SQL
+            TRIM({$e}.TIPO_EVENTO) AS TIPO_EVENTO,
+            TO_CHAR({$e}.FECHA_EVENTO, 'YYYY-MM-DD') AS FECHA_EVENTO,
+            TRIM({$e}.CALLE) AS CALLE,
+            TRIM({$e}.NUMERO) AS NUMERO,
+            TRIM({$e}.COLONIA) AS CDGPAI,
+            TRIM({$e}.CODIGO_POSTAL) AS CODIGO_POSTAL,
+            TRIM({$e}.MUNICIPIO) AS CDGMU,
+            TRIM({$e}.ENTIDAD_FEDERATIVA) AS ESTADO_NOMBRE
+        SQL;
+    }
+
+    private static function nombreCompletoLikeExpr(string $alias = 'C'): string
+    {
+        $c = $alias;
+
+        return "UPPER(TRIM({$c}.NOMBRE1) || ' ' || TRIM(NVL({$c}.NOMBRE2,'')) || ' ' || TRIM(NVL({$c}.APELLIDO1,'')) || ' ' || TRIM(NVL({$c}.APELLIDO2,'')))";
+    }
+
+    /** Fase 1: CLIENTE por CURP (normalizada). */
     public function buscarFase1PorCurpExacta(string $curp18): ?array
     {
         $db = new Database();
         if ($db->db_activa === null) {
             return null;
         }
-        $sql = self::selectBaseSql() . ' WHERE UPPER(TRIM(CL.CURP)) = :curp AND ROWNUM = 1';
-        $row = $db->queryOne($sql, ['curp' => $curp18]);
+        $curp = strtoupper(preg_replace('/\s+/', '', trim($curp18)) ?? '');
+        $from = self::fromCliente();
+        $sql = 'SELECT ' . self::selectClienteProyeccion('C') . " FROM {$from} WHERE " . self::normCurpExpr('C.CURP') . ' = :curp AND ROWNUM = 1';
+        $row = $db->queryOne($sql, ['curp' => $curp]);
+
         return !empty($row) ? $row : null;
     }
 
     /**
-     * Consulta directa por CURP para endpoint GET /persona/{curp}.
+     * GET /persona/{curp} — solo CLIENTE.
      *
      * @return array<string,mixed>|null
      */
@@ -89,26 +138,10 @@ class CultivaClienteRepository
         }
 
         $curp = strtoupper(preg_replace('/\s+/', '', trim($curp18)) ?? '');
-        $fromCl = self::padronClFromClause();
-        $sql = <<<SQL
-            SELECT
-                CL.CODIGO AS CODIGO_CLIENTE,
-                TRIM(CL.NOMBRE1) AS NOMBRE1,
-                TRIM(CL.NOMBRE2) AS NOMBRE2,
-                TRIM(CL.PRIMAPE) AS PRIMAPE,
-                TRIM(CL.SEGAPE) AS SEGAPE,
-                TRIM(CL.CURP) AS CURP,
-                TRIM(CL.RFC) AS RFC,
-                TO_CHAR(CL.NACIMIENTO, 'YYYY-MM-DD') AS FECHA_NACIMIENTO,
-                TRIM(CL.SEXO) AS SEXO,
-                TRIM(CL.CDGPAI) AS CDGPAI,
-                TRIM(CL.CDGEF) AS CDGEF,
-                TRIM(CL.CDGMU) AS CDGMU,
-                TRIM(CL.CALLE) AS CALLE
-            FROM {$fromCl}
-            WHERE UPPER(REGEXP_REPLACE(TRIM(CL.CURP), '[[:space:]]+', '')) = UPPER(REGEXP_REPLACE(TRIM(:curp), '[[:space:]]+', ''))
-              AND ROWNUM = 1
-        SQL;
+        $from = self::fromCliente();
+        $sql = 'SELECT '
+            . self::selectClienteProyeccion('C')
+            . " FROM {$from} WHERE " . self::normCurpExpr('C.CURP') . ' = :curp AND ROWNUM = 1';
         $row = $db->queryOne($sql, ['curp' => $curp]);
 
         if ($this->debugEnabled()) {
@@ -119,12 +152,10 @@ class CultivaClienteRepository
     }
 
     /**
-     * Fase 2: búsqueda “histórica” por fragmento de nombre (LIKE) acotada por ventana de fecha.
+     * Fase 2: EVENTOS ⨝ CLIENTE, ventana sobre FECHA_EVENTO.
      *
-     * @param string $fragmento
-     * @param int $limite
-     * @param string|null $fechaInicio YYYY-MM-DD (opcional)
-     * @param string|null $fechaFin YYYY-MM-DD (opcional)
+     * @param string|null $fechaInicio YYYY-MM-DD
+     * @param string|null $fechaFin    YYYY-MM-DD
      */
     public function buscarFase2HistoricaPorNombre(
         string $fragmento,
@@ -136,7 +167,7 @@ class CultivaClienteRepository
     }
 
     /**
-     * Búsqueda general para endpoint POST /busqueda.
+     * POST /busqueda — solo CLIENTE (sin RFC en padrón: criterio RFC no devuelve filas).
      *
      * @return list<array<string,mixed>>
      */
@@ -148,35 +179,38 @@ class CultivaClienteRepository
         }
 
         $limite = max(1, min(50, $limite));
+        $from = self::fromCliente();
         $where = ['1=1'];
         $params = ['limite' => $limite];
 
+        $nombreExpr = self::nombreCompletoLikeExpr('C');
+
         if ($curp !== null && trim($curp) !== '') {
-            $where[] = 'UPPER(TRIM(CL.CURP)) LIKE :curp_like';
-            $params['curp_like'] = '%' . strtoupper(trim($curp)) . '%';
+            $where[] = self::normCurpExpr('C.CURP') . ' LIKE :curp_like';
+            $params['curp_like'] = '%' . strtoupper(preg_replace('/\s+/', '', trim($curp)) ?? '') . '%';
         }
         if ($nombreFragmento !== null && trim($nombreFragmento) !== '') {
-            $where[] = 'UPPER(CONCATENA_NOMBRE(CL.NOMBRE1, CL.NOMBRE2, CL.PRIMAPE, CL.SEGAPE)) LIKE :nom_like';
+            $where[] = "{$nombreExpr} LIKE :nom_like";
             $params['nom_like'] = '%' . strtoupper(trim($nombreFragmento)) . '%';
         }
         if ($rfc !== null && trim($rfc) !== '') {
-            $where[] = 'UPPER(TRIM(CL.RFC)) LIKE :rfc_like';
-            $params['rfc_like'] = '%' . strtoupper(trim($rfc)) . '%';
+            $where[] = '1=0';
         }
 
-        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
+        $sql = 'SELECT * FROM (SELECT '
+            . self::selectClienteProyeccion('C')
+            . " FROM {$from} WHERE " . implode(' AND ', $where)
+            . ' ORDER BY C.ID) WHERE ROWNUM <= :limite';
+
         $rows = $db->queryAll($sql, $params);
+
         return is_array($rows) ? $rows : [];
     }
 
     /**
-     * Fase 3: búsqueda continua — en este modelo se usa criterio alterno (p. ej. RFC + nombre) para simular eventos distintos.
+     * Fase 3: EVENTOS ⨝ CLIENTE; filtro incremental por FECHA_EVENTO.
      *
-     * @return list<array<string,mixed>>
-     */
-    /**
-     * @param string|null $watermarkIso Marca temporal ISO (desde PUI_REPORTES_ACTIVOS); null = sin filtro incremental.
-     * @param bool $watermarkInclusive true en la primera pasada (desde FECHA_FIN_FASE2); false si ya hubo ejecución previa.
+     * @param string|null $watermarkIso Marca ISO (desde PUI_REPORTES_ACTIVOS); null = sin filtro incremental.
      *
      * @return list<array<string,mixed>>
      */
@@ -192,30 +226,40 @@ class CultivaClienteRepository
             return [];
         }
         $limite = max(1, min(50, $limite));
-        $where = ['1=1'];
-        $params = [];
+        $from = self::fromEventosJoinCliente();
+
+        $nombreExpr = self::nombreCompletoLikeExpr('C');
+
+        $where = [];
+        $params = ['limite' => $limite];
 
         if ($fragmentoNombre !== '') {
-            $where[] = 'UPPER(CONCATENA_NOMBRE(CL.NOMBRE1, CL.NOMBRE2, CL.PRIMAPE, CL.SEGAPE)) LIKE :nom_like';
+            $where[] = "{$nombreExpr} LIKE :nom_like";
             $params['nom_like'] = '%' . strtoupper(trim($fragmentoNombre)) . '%';
         }
         if ($rfcOpcional !== null && $rfcOpcional !== '') {
-            $where[] = 'UPPER(TRIM(CL.RFC)) LIKE :rfc_like';
-            $params['rfc_like'] = '%' . strtoupper(trim($rfcOpcional)) . '%';
+            $where[] = '1=0';
+        }
+        if ($where === []) {
+            $where[] = '1=1';
         }
 
-        $expr = $this->clActividadTimestampExpr();
-        if ($expr !== null && $watermarkIso !== null && trim($watermarkIso) !== '') {
+        if ($watermarkIso !== null && trim($watermarkIso) !== '') {
             $wm = substr(trim($watermarkIso), 0, 32);
+            $wm19 = strlen($wm) >= 19 ? substr($wm, 0, 19) : $wm;
             $op = $watermarkInclusive ? '>=' : '>';
-            $where[] = '(' . $expr . ') ' . $op . ' TO_TIMESTAMP(:wm, \'YYYY-MM-DD"T"HH24:MI:SS\')';
-            $params['wm'] = strlen($wm) >= 19 ? substr($wm, 0, 19) : $wm;
+            $where[] = 'E.FECHA_EVENTO ' . $op . " TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS')";
+            $params['wm'] = $wm19;
         }
 
-        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
-        $params['limite'] = $limite;
+        $sql = 'SELECT ' . self::selectClienteSoloPersona('C') . ', ' . self::selectEventoProyeccion('E')
+            . " FROM {$from} WHERE " . implode(' AND ', $where)
+            . ' ORDER BY E.FECHA_EVENTO, E.ROWID';
+
+        $sql = 'SELECT * FROM (' . $sql . ') t WHERE ROWNUM <= :limite';
 
         $rows = $db->queryAll($sql, $params);
+
         return is_array($rows) ? $rows : [];
     }
 
@@ -227,58 +271,50 @@ class CultivaClienteRepository
         int $limite,
         ?string $fechaInicio = null,
         ?string $fechaFin = null
-    ): array
-    {
+    ): array {
         $db = new Database();
         if ($db->db_activa === null) {
             return [];
         }
         $limite = max(1, min(50, $limite));
-        $where = ['1=1'];
+        $from = self::fromEventosJoinCliente();
+
+        $nombreExpr = self::nombreCompletoLikeExpr('C');
+
+        $where = [
+            "{$nombreExpr} LIKE :nom_like",
+        ];
         $params = [
             'nom_like' => '%' . strtoupper(trim($fragmento)) . '%',
             'limite' => $limite,
         ];
-        $where[] = 'UPPER(CONCATENA_NOMBRE(CL.NOMBRE1, CL.NOMBRE2, CL.PRIMAPE, CL.SEGAPE)) LIKE :nom_like';
 
-        // Ventana [fecha_desaparición, hoy] acotada a 12 años (orquestador). Criterio sobre actividad del registro en CL, no NACIMIENTO.
-        $actividad = $this->clActividadTimestampExpr();
         if (
-            $actividad !== null
-            && $fechaInicio !== null
+            $fechaInicio !== null
             && $fechaFin !== null
             && trim($fechaInicio) !== ''
             && trim($fechaFin) !== ''
         ) {
             $params['fecha_inicio'] = trim($fechaInicio);
             $params['fecha_fin'] = trim($fechaFin);
-            $where[] = 'TRUNC(' . $actividad . ') BETWEEN TRUNC(TO_DATE(:fecha_inicio, \'YYYY-MM-DD\')) AND TRUNC(TO_DATE(:fecha_fin, \'YYYY-MM-DD\'))';
+            $where[] = 'TRUNC(E.FECHA_EVENTO) BETWEEN TRUNC(TO_DATE(:fecha_inicio, \'YYYY-MM-DD\')) AND TRUNC(TO_DATE(:fecha_fin, \'YYYY-MM-DD\'))';
         }
 
-        $sql = 'SELECT * FROM (' . self::selectBaseSql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY CL.CODIGO) WHERE ROWNUM <= :limite';
+        $sql = 'SELECT ' . self::selectClienteSoloPersona('C') . ', ' . self::selectEventoProyeccion('E')
+            . " FROM {$from} WHERE " . implode(' AND ', $where)
+            . ' ORDER BY E.FECHA_EVENTO, E.ROWID';
+
+        $sql = 'SELECT * FROM (' . $sql . ') t WHERE ROWNUM <= :limite';
+
         $rows = $db->queryAll($sql, $params);
+
         return is_array($rows) ? $rows : [];
     }
 
     private function debugEnabled(): bool
     {
         $v = PuiConfig::get('PUI_DEBUG_CONFIG', '0');
-        return $v === 1 || $v === '1' || $v === true;
-    }
 
-    /**
-     * Expresión Oracle (columna o NVL) con fecha/hora de alta o última modificación del cliente en CL.
-     * Configurar en pui.ini: PUI_CL_ACTIVIDAD_TIMESTAMP_EXPR (ej. NVL(CL.MODIFICA, CL.ALTA)).
-     */
-    private function clActividadTimestampExpr(): ?string
-    {
-        $raw = trim((string) PuiConfig::get('PUI_CL_ACTIVIDAD_TIMESTAMP_EXPR', ''));
-        if ($raw === '') {
-            return null;
-        }
-        if (!preg_match('/^[A-Z0-9_().,\s]+$/i', $raw)) {
-            return null;
-        }
-        return $raw;
+        return $v === 1 || $v === '1' || $v === true;
     }
 }
