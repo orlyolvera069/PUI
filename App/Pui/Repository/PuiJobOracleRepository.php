@@ -50,6 +50,14 @@ class PuiJobOracleRepository
         return \is_array($decoded) ? $decoded : ['_raw' => $json];
     }
 
+    /**
+     * PDO OCI: tras MERGE/UPDATE/INSERT correctos el SQLSTATE a veces es null o '' (no '00000').
+     */
+    private static function isPdoSqlStateSuccess(?string $sqlState): bool
+    {
+        return $sqlState === null || $sqlState === '' || $sqlState === '00000';
+    }
+
     private function parseSqlOffset(?string $message): ?int
     {
         if ($message === null || $message === '') {
@@ -169,7 +177,8 @@ class PuiJobOracleRepository
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $err = $stmt->errorInfo();
-            if ($err[0] !== '00000') {
+            $sqlState = $err[0] ?? null;
+            if (!self::isPdoSqlStateSuccess($sqlState)) {
                 $pe = new \PDOException((string) ($err[2] ?? 'Error en sentencia SQL'), is_numeric($err[1] ?? null) ? (int) $err[1] : 0);
                 $this->logOracleFailure($rid, $operation, $pe, $sql, $params, $payload, $idReporte, $stmt);
                 PuiLogger::throwDatabaseUnavailable($pe);
@@ -203,7 +212,8 @@ class PuiJobOracleRepository
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $err = $stmt->errorInfo();
-            if ($err[0] !== '00000') {
+            $sqlState = $err[0] ?? null;
+            if (!self::isPdoSqlStateSuccess($sqlState)) {
                 $pe = new \PDOException((string) ($err[2] ?? 'Error en sentencia SQL'), is_numeric($err[1] ?? null) ? (int) $err[1] : 0);
                 $this->logOracleFailure($rid, $operation, $pe, $sql, $params, null, $idReporte, $stmt);
                 return false;

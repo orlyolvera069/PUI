@@ -3,6 +3,7 @@
 namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\HttpPuiOutboundClient;
 use App\Pui\Integration\PuiOutboundTimeoutException;
@@ -95,6 +96,13 @@ class PuiReporteService
             } catch (\Throwable $ignored) {
             }
             return $this->err($requestId, 503, 'PUI-DB-503', 'Servicio de datos no disponible.');
+        } catch (DatabaseUnavailableException $e) {
+            PuiLogger::error($requestId, 'activar_db_unavailable', ['msg' => $e->getMessage()]);
+            try {
+                $this->marcarEstado($id, 'ERROR');
+            } catch (\Throwable $ignored) {
+            }
+            return $this->err($requestId, 503, 'PUI-DB-503', 'Servicio de datos no disponible.');
         } catch (\RuntimeException $e) {
             $this->marcarEstado($id, 'ERROR');
             return $this->err($requestId, 502, 'PUI-EXT-502', 'Fallo al notificar a la PUI.', $e->getMessage());
@@ -104,7 +112,7 @@ class PuiReporteService
                 $this->marcarEstado($id, 'ERROR');
             } catch (\Throwable $ignored) {
             }
-            return $this->err($requestId, 503, 'PUI-DB-503', 'Servicio de datos no disponible.');
+            return $this->err($requestId, 502, 'PUI-EXT-502', 'No se pudo completar la activación del reporte.', $e->getMessage());
         }
     }
 
@@ -140,8 +148,19 @@ class PuiReporteService
             'activo' => 1,
         ]);
 
-        $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
-        $this->jobs->programarFase3($id, $esPrueba, 15);
+        try {
+            $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
+        } catch (\Throwable $e) {
+            if (!$this->shouldSwallowOrchestratorFailure($e)) {
+                throw $e;
+            }
+            PuiLogger::warning($requestId, 'activar_orquestador_continua_tras_fallo_saliente', [
+                'class' => get_class($e),
+                'msg' => $e->getMessage(),
+            ]);
+        }
+
+        $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
         $this->kickFase3RunnerDaemon();
 
         $this->marcarEstado($id, 'ACTIVO');
@@ -182,6 +201,40 @@ class PuiReporteService
                 'message' => 'Registro de finalización de búsqueda histórica guardado correctamente',
             ],
         ];
+    }
+
+    private function notifyAbortEnabled(): bool
+    {
+        $v = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
+
+        return $v === '1' || $v === 1 || $v === true;
+    }
+
+    /**
+     * Con PUI_ABORT_ON_NOTIFY_FAIL = 0, fallos HTTP/timeout hacia la PUI externa no deben impedir
+     * completar activación (reporte persistido, job fase 3, respuesta 200).
+     */
+    private function shouldSwallowOrchestratorFailure(\Throwable $e): bool
+    {
+        if ($this->notifyAbortEnabled()) {
+            return false;
+        }
+        if ($e instanceof DatabaseUnavailableException || $e instanceof \PDOException) {
+            return false;
+        }
+        if ($e instanceof \InvalidArgumentException) {
+            return false;
+        }
+        if ($e instanceof PuiOutboundTimeoutException) {
+            return true;
+        }
+        if ($e instanceof \RuntimeException) {
+            $m = $e->getMessage();
+
+            return str_contains($m, 'busqueda-finalizada HTTP') || str_contains($m, 'notificar-coincidencia HTTP');
+        }
+
+        return false;
     }
 
     private function marcarEstado(string $id, string $estado): void

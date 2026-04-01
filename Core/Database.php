@@ -138,7 +138,9 @@ class Database
         try {
             $stmt = $this->db_activa->prepare($sql);
             $stmt->execute($params);
-            return array_shift($stmt->fetchAll(PDO::FETCH_ASSOC));
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            return array_shift($rows);
         } catch (\PDOException $e) {
             self::muestraError($e, $sql, $params);
             return [];
@@ -161,11 +163,16 @@ class Database
     {
         try {
             $stmt = $this->db_activa->prepare($sql);
-            $stmt->execute($params);
+            if (!$stmt->execute($params)) {
+                return false;
+            }
             $err = $stmt->errorInfo();
-
-            if ($err[0] != '00000')
+            $sqlState = $err[0] ?? null;
+            // PDO OCI: tras MERGE/INSERT/UPDATE correctos el SQLSTATE a veces viene vacío o null
+            // (no '00000'); tratarlo como éxito si execute() ya tuvo éxito.
+            if ($sqlState !== null && $sqlState !== '' && $sqlState !== '00000') {
                 throw new \PDOException("Error en insert: " . print_r($err, 1) . "\nSql: $sql \nDatos: " . print_r($params, 1));
+            }
 
             return true;
         } catch (\PDOException $e) {

@@ -3,6 +3,7 @@
 namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\PuiOutboundClientInterface;
 use App\Pui\Integration\PuiOutboundFactory;
 use App\Pui\Integration\PuiOutboundTimeoutException;
@@ -148,9 +149,14 @@ class PuiSearchOrchestratorService
         }
         if ($rbf['http_status'] < 200 || $rbf['http_status'] >= 300) {
             $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
-            if ($abort === '1' || $abort === 1 || $abort === true) {
+            $abortOn = $abort === '1' || $abort === 1 || $abort === true;
+            if ($abortOn) {
                 throw new \RuntimeException('busqueda-finalizada HTTP ' . $rbf['http_status']);
             }
+            PuiLogger::warning($requestId, 'outbound_busqueda_finalizada_no_2xx_continua', [
+                'http_status' => $rbf['http_status'],
+                'endpoint' => 'busqueda-finalizada',
+            ]);
         }
     }
 
@@ -304,9 +310,14 @@ class PuiSearchOrchestratorService
         }
         if ($r['http_status'] < 200 || $r['http_status'] >= 300) {
             $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
-            if ($abort === '1' || $abort === 1 || $abort === true) {
+            $abortOn = $abort === '1' || $abort === 1 || $abort === true;
+            if ($abortOn) {
                 throw new \RuntimeException('notificar-coincidencia HTTP ' . $r['http_status']);
             }
+            PuiLogger::warning($requestId, 'outbound_notificar_coincidencia_no_2xx_continua', [
+                'http_status' => $r['http_status'],
+                'fase_busqueda' => (string) ($payload['fase_busqueda'] ?? ''),
+            ]);
         }
     }
 
