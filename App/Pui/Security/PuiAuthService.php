@@ -3,40 +3,29 @@
 namespace App\Pui\Security;
 
 use App\Pui\Config\PuiConfig;
-use App\Pui\Repository\PuiJwtTokenOracleRepository;
 
 /**
  * Servicio central de autenticación para endpoints PUI protegidos por JWT.
+ *
+ * La validez del token es solo criptográfica y temporal (JwtService::decode):
+ * firma HS256, exp, nbf, iat, iss, aud. El mismo JWT se puede usar en cada
+ * petición hasta que expire; no hay consumo por JTI en base de datos.
  */
 class PuiAuthService
 {
     private JwtService $jwt;
-    private PuiJwtTokenOracleRepository $jwtTokens;
 
-    public function __construct(?JwtService $jwt = null, ?PuiJwtTokenOracleRepository $jwtTokens = null)
+    public function __construct(?JwtService $jwt = null)
     {
         $secret = PuiConfig::jwtSecretOrFail();
         $issuer = (string) PuiConfig::get('JWT_ISSUER', 'cultiva-pui');
         $audience = (string) PuiConfig::get('JWT_AUDIENCE', 'pui-institucion');
         $this->jwt = $jwt ?? new JwtService($secret, $issuer, $audience);
-        $this->jwtTokens = $jwtTokens ?? new PuiJwtTokenOracleRepository();
     }
 
     public function validateJwt(string $token): bool
     {
-        $payload = $this->decodeJwt($token);
-        if ($payload === null) {
-            return false;
-        }
-
-        $jti = isset($payload['jti']) ? trim((string) $payload['jti']) : '';
-        $exp = isset($payload['exp']) && is_numeric($payload['exp']) ? (int) $payload['exp'] : 0;
-        if ($jti === '' || $exp <= 0) {
-            return false;
-        }
-
-        $this->jwtTokens->purgeExpired();
-        return $this->jwtTokens->consumeJti($jti, $exp);
+        return $this->decodeJwt($token) !== null;
     }
 
     /**

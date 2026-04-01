@@ -11,6 +11,7 @@ use App\Pui\Service\PuiReporteService;
 
 /**
  * Rutas institucionales según Manual Técnico PUI (eventos: activar reporte, desactivar, login JWT).
+ * GET /salud — disponible sin JWT (monitoreo).
  * Base: PUI_PUBLIC_BASE (p. ej. /api/pui).
  */
 class PuiFrontController
@@ -66,6 +67,18 @@ class PuiFrontController
                 }
                 $r = $this->login->login($body);
                 $this->sendRaw($r['status'], $r['body']);
+                return;
+            }
+
+            if ($method === 'GET' && $path === '/salud') {
+                $this->sendRaw(200, [
+                    'meta' => [
+                        'requestId' => $requestId,
+                        'timestamp' => gmdate('c'),
+                        'version' => '1.0.0',
+                    ],
+                    'status' => 'ok',
+                ]);
                 return;
             }
 
@@ -239,6 +252,7 @@ class PuiFrontController
     {
         if (in_array($path, [
             '/login',
+            '/salud',
             '/activar-reporte',
             '/activar-reporte-prueba',
             '/desactivar-reporte',

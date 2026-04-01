@@ -3,6 +3,7 @@
  * Front controller PUI — Manual Técnico (modelo por eventos / reportes).
  *
  * Institución expone (base típica /api/pui):
+ *   GET  /api/pui/salud   (sin JWT — comprobación de servicio)
  *   POST /api/pui/login
  *   POST /api/pui/activar-reporte
  *   POST /api/pui/activar-reporte-prueba
