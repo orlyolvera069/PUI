@@ -85,6 +85,13 @@ def _lugar_nacimiento_final(curp: str, explicit: str | None) -> str:
     return lugar_nacimiento_desde_curp(curp)
 
 
+def _evento_valido_fase2_y_3(row: EventoHistoricoRow) -> bool:
+    """Manual 6: fases 2 y 3 requieren tipo_evento y fecha_evento; si faltan, no se notifica."""
+    te = (row.tipo_evento or "").strip()
+    fe = (row.fecha_evento or "").strip()
+    return bool(te) and bool(fe)
+
+
 def _tiene_datos_basicos_utiles(row: DatosBasicosRow) -> bool:
     """Manual 6 fase 1: omitir notificación si no hay ningún dato útil."""
     return any(
@@ -248,7 +255,7 @@ class ReporteService:
         curp = req.curp.upper()
         reporte_id = req.id
 
-        # --- Fase 1
+        # --- Fase 1 (fallo de una notificación no debe impedir fase 2 ni cierre)
         basicos = self._repo.buscar_datos_basicos_recientes(curp)
         if basicos is not None and _tiene_datos_basicos_utiles(basicos):
             try:
@@ -257,7 +264,6 @@ class ReporteService:
                 logger.info("fase1_notificada", id=reporte_id, curp=curp)
             except PuiClientError as exc:
                 logger.error("fase1_error_pui", error=str(exc), id=reporte_id)
-                raise
 
         # --- Fase 2
         fd = _parse_date(req.fecha_desaparicion)
@@ -265,17 +271,23 @@ class ReporteService:
             ini, fin = _ventana_historico(fd)
             rows = self._repo.buscar_historico(curp, ini, fin)
             for row in rows:
+                if not _evento_valido_fase2_y_3(row):
+                    logger.warning(
+                        "fase2_coincidencia_omitida_evento_incompleto",
+                        id=reporte_id,
+                        curp=curp,
+                    )
+                    continue
                 try:
                     pl = _payload_fase2_o_3(self._settings, reporte_id, curp, row, "2")
                     await self._pui.notificar_coincidencia(pl)
                     logger.info("fase2_notificada", id=reporte_id, curp=curp)
                 except PuiClientError as exc:
                     logger.error("fase2_error_pui", error=str(exc), id=reporte_id)
-                    raise
         else:
             logger.info("fase2_omitida_sin_fecha_desaparicion", id=reporte_id, curp=curp)
 
-        # --- Cierre búsqueda histórica (siempre)
+        # --- Cierre búsqueda histórica (manual 6: siempre tras fases 1 y 2, con o sin coincidencias)
         try:
             await self._pui.busqueda_finalizada(reporte_id)
             logger.info("busqueda_finalizada_ok", id=reporte_id)
@@ -305,16 +317,24 @@ class ReporteService:
             try:
                 rows = self._repo.buscar_nuevos_o_modificados(ar.curp, ar.ultima_revision)
                 for row in rows:
-                    pl = _payload_fase2_o_3(self._settings, ar.reporte_id, ar.curp, row, "3")
-                    await self._pui.notificar_coincidencia(pl)
-                    logger.info("fase3_notificada", id=ar.reporte_id, curp=ar.curp)
+                    if not _evento_valido_fase2_y_3(row):
+                        logger.warning(
+                            "fase3_coincidencia_omitida_evento_incompleto",
+                            id=ar.reporte_id,
+                            curp=ar.curp,
+                        )
+                        continue
+                    try:
+                        pl = _payload_fase2_o_3(self._settings, ar.reporte_id, ar.curp, row, "3")
+                        await self._pui.notificar_coincidencia(pl)
+                        logger.info("fase3_notificada", id=ar.reporte_id, curp=ar.curp)
+                    except PuiClientError as exc:
+                        logger.error(
+                            "fase3_notificar_error",
+                            error=str(exc),
+                            id=ar.reporte_id,
+                            curp=ar.curp,
+                        )
                 await self._registry.actualizar_revision(ar.reporte_id, ahora)
-            except PuiClientError as exc:
-                logger.error(
-                    "fase3_error_pui",
-                    error=str(exc),
-                    id=ar.reporte_id,
-                    curp=ar.curp,
-                )
             except Exception as exc:
                 logger.exception("fase3_error", error=str(exc), id=ar.reporte_id)

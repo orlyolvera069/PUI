@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.utils.reporte_id import es_id_reporte_pui_valido
+
 
 class LoginRequest(BaseModel):
     """Manual 8.1 — autenticación de la PUI hacia la institución diversa."""
@@ -34,7 +36,12 @@ class LoginResponse(BaseModel):
 class ActivarReporteRequest(BaseModel):
     """Manual 8.2 — activar reporte de búsqueda."""
 
-    id: str = Field(..., min_length=36, max_length=75)
+    id: str = Field(
+        ...,
+        min_length=36,
+        max_length=75,
+        description="Formato manual: <FUB>-<UUID4>",
+    )
     curp: str = Field(
         ...,
         min_length=18,
@@ -58,6 +65,16 @@ class ActivarReporteRequest(BaseModel):
     codigo_postal: str | None = Field(None, max_length=5)
     municipio_o_alcaldia: str | None = Field(None, max_length=100)
     entidad_federativa: str | None = Field(None, max_length=40)
+
+    @field_validator("id")
+    @classmethod
+    def _id_formato_fub_uuid4(cls, v: str) -> str:
+        s = v.strip()
+        if not es_id_reporte_pui_valido(s):
+            raise ValueError(
+                "id debe cumplir el formato <FUB>-<UUID4> (folio único de búsqueda + UUID versión 4)"
+            )
+        return s
 
     @field_validator("curp", mode="before")
     @classmethod
@@ -94,7 +111,17 @@ class ActivarReporteResponse(BaseModel):
 class DesactivarReporteRequest(BaseModel):
     """Manual 8.4."""
 
-    id: str = Field(..., min_length=36, max_length=75)
+    id: str = Field(..., min_length=36, max_length=75, description="Formato manual: <FUB>-<UUID4>")
+
+    @field_validator("id")
+    @classmethod
+    def _id_formato_fub_uuid4_desactivar(cls, v: str) -> str:
+        s = v.strip()
+        if not es_id_reporte_pui_valido(s):
+            raise ValueError(
+                "id debe cumplir el formato <FUB>-<UUID4> (folio único de búsqueda + UUID versión 4)"
+            )
+        return s
 
 
 class DesactivarReporteResponse(BaseModel):

@@ -99,24 +99,27 @@ async def activar_reporte(
 async def activar_reporte_prueba(
     body: ActivarReporteRequest,
     request: Request,
+    settings: Settings = Depends(get_settings),
     _: dict = Depends(requiere_jwt_pui),
 ) -> dict[str, str]:
     """
-    Valida payload y verifica conectividad con la PUI (login).
-    No ejecuta el flujo completo para no enviar datos de prueba a producción.
+    Valida payload (manual 8.3). Por defecto NO llama a la PUI /login.
+    Si PUI_PRUEBA_VERIFICAR_LOGIN_REMOTO=true, prueba login remoto.
     """
     _ = body
-    pui: PuiClient | None = getattr(request.app.state, "pui_client", None)
-    if pui is None:
-        raise HTTPException(status_code=503, detail="Cliente PUI no inicializado")
-    try:
-        await pui.obtener_token()
-    except PuiClientError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"No hay conectividad con la PUI: {exc}",
-        ) from exc
-    return {"message": "Prueba recibida y conectividad con la PUI verificada correctamente."}
+    if settings.pui_prueba_verificar_login_remoto:
+        pui: PuiClient | None = getattr(request.app.state, "pui_client", None)
+        if pui is None:
+            raise HTTPException(status_code=503, detail="Cliente PUI no inicializado")
+        try:
+            await pui.obtener_token()
+        except PuiClientError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"No hay conectividad con la PUI: {exc}",
+            ) from exc
+        return {"message": "Prueba recibida y conectividad con la PUI verificada correctamente."}
+    return {"message": "Prueba recibida: payload válido (sin login remoto a la PUI)."}
 
 
 @router.post(

@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     continuous_search_interval_seconds: int = 3600
 
+    # Si true, POST /activar-reporte-prueba llama a la PUI /login para probar conectividad (manual 8.3 opcional).
+    pui_prueba_verificar_login_remoto: bool = False
+
     @field_validator("pui_webhook_password")
     @classmethod
     def _validar_clave_webhook(cls, v: str) -> str:
