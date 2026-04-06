@@ -86,10 +86,16 @@ def _lugar_nacimiento_final(curp: str, explicit: str | None) -> str:
 
 
 def _evento_valido_fase2_y_3(row: EventoHistoricoRow) -> bool:
-    """Manual 6: fases 2 y 3 requieren tipo_evento y fecha_evento; si faltan, no se notifica."""
+    """Manual 6 / 7.2: tipo_evento y fecha_evento obligatorios; fecha en YYYY-MM-DD."""
     te = (row.tipo_evento or "").strip()
     fe = (row.fecha_evento or "").strip()
-    return bool(te) and bool(fe)
+    if not te or not fe:
+        return False
+    try:
+        date.fromisoformat(fe)
+    except ValueError:
+        return False
+    return True
 
 
 def _tiene_datos_basicos_utiles(row: DatosBasicosRow) -> bool:

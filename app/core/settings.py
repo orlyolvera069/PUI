@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     pui_base_url: str = Field(..., description="URL base de la PUI sin barra final")
     pui_institucion_id: str = Field(..., min_length=4, max_length=13)
     pui_clave: str = Field(..., min_length=1, max_length=50)
+    # Si tiene valor, el cliente PUI usa este JWT en Authorization sin llamar POST /login (simulador / token fijo).
+    pui_bearer_token: str = ""
 
     oracle_host: str = "localhost"
     oracle_port: int = 1521

@@ -85,6 +85,11 @@ class PuiClient:
         raise PuiClientError("error desconocido en POST hacia la PUI")
 
     async def obtener_token(self) -> str:
+        fijo = (self._settings.pui_bearer_token or "").strip()
+        if fijo:
+            logger.info("pui_bearer_fijo_sin_login_remoto", institucion_id=self._settings.pui_institucion_id.upper())
+            return fijo
+
         if not self._should_refresh_token():
             assert self._token is not None
             return self._token
