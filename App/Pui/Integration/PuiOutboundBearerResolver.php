@@ -5,7 +5,8 @@ namespace App\Pui\Integration;
 use App\Pui\Config\PuiConfig;
 
 /**
- * Bearer para HTTP saliente hacia la PUI/simulador: token estático en ini o JWT vía POST /login.
+ * Bearer para HTTP saliente hacia la PUI/simulador.
+ * El simulador de pruebas espera JWT obtenido con POST /login; no usa la clave como Authorization: Bearer.
  */
 class PuiOutboundBearerResolver
 {

@@ -10,9 +10,10 @@ use App\Pui\Validation\PuiManualPayloadValidator;
  *
  * Configuración (pui.ini / env):
  * - PUI_OUTBOUND_BASE_URL: URL base del servicio PUI (ej. https://pui.ejemplo.gob.mx/api/v1)
- * - PUI_OUTBOUND_AUTH_MODE: static (default) | login — si login, JWT vía POST PUI_OUTBOUND_LOGIN_PATH con clave/institución
- * - PUI_OUTBOUND_TOKEN: Bearer estático (modo static)
- * - PUI_OUTBOUND_TOKEN_NOTIFICAR / PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA: opcionales; si vienen vacíos se usa PUI_OUTBOUND_TOKEN
+ * - Simulador típico: exige POST /login para obtener JWT; no acepta la clave de login como Bearer directo.
+ * - PUI_OUTBOUND_AUTH_MODE: static | login — con login, este cliente obtiene JWT vía POST PUI_OUTBOUND_LOGIN_PATH y lo usa como Bearer.
+ * - PUI_OUTBOUND_TOKEN: Bearer estático solo en modo static (acordado con la PUI real).
+ * - PUI_OUTBOUND_TOKEN_NOTIFICAR / PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA: opcionales (modo static); vacío = PUI_OUTBOUND_TOKEN
  * - PUI_PATH_NOTIFICAR_COINCIDENCIA: ruta, default /notificar-coincidencia
  * - PUI_PATH_BUSQUEDA_FINALIZADA: ruta, default /busqueda-finalizada
  * - PUI_HTTP_RETRIES: reintentos (default 3)
