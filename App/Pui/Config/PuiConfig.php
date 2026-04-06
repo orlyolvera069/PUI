@@ -2,6 +2,8 @@
 
 namespace App\Pui\Config;
 
+use App\Pui\Integration\PuiOutboundBearerResolver;
+
 defined('APPPATH') or define('APPPATH', dirname(__DIR__, 2));
 
 /**
@@ -33,7 +35,16 @@ class PuiConfig
         'PUI_INTEGRATION_MODE',
         'INSTITUCION_RFC',
         'PUI_OUTBOUND_BASE_URL',
+        'PUI_OUTBOUND_AUTH_MODE',
+        'PUI_OUTBOUND_LOGIN_PATH',
+        'PUI_OUTBOUND_LOGIN_INSTITUCION_ID',
+        'PUI_OUTBOUND_LOGIN_USUARIO',
+        'PUI_OUTBOUND_LOGIN_CLAVE',
+        'PUI_OUTBOUND_LOGIN_BODY_STYLE',
+        'PUI_OUTBOUND_LOGIN_CACHE_SECONDS',
         'PUI_OUTBOUND_TOKEN',
+        'PUI_OUTBOUND_TOKEN_NOTIFICAR',
+        'PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA',
         'PUI_PATH_NOTIFICAR_COINCIDENCIA',
         'PUI_PATH_BUSQUEDA_FINALIZADA',
         'PUI_HTTP_RETRIES',
@@ -58,6 +69,7 @@ class PuiConfig
         'PUI_CL_ACTIVIDAD_TIMESTAMP_EXPR',
         'PUI_VERBOSE_CLIENT_ERRORS',
         'PUI_ENABLE_ACTIVAR_PRUEBA',
+        'PUI_ENABLE_TEST_LOGIN_SIMULADOR',
         'PUI_OUTBOUND_PING_PATH',
         'PUI_OUTBOUND_PING_TIMEOUT_MS',
         'PUI_PADRON_SCHEMA',
@@ -193,7 +205,7 @@ class PuiConfig
      * Modo de cumplimiento estricto del manual técnico:
      * - PUI_MOCK_MODE debe ser 0
      * - PUI_INTEGRATION_MODE debe ser real
-     * - PUI_OUTBOUND_BASE_URL y PUI_OUTBOUND_TOKEN son obligatorios
+     * - PUI_OUTBOUND_BASE_URL y autenticación saliente: PUI_OUTBOUND_TOKEN (modo static) o login (PUI_OUTBOUND_AUTH_MODE=login + clave)
      *
      * @throws \RuntimeException
      */
@@ -220,9 +232,19 @@ class PuiConfig
             throw new \RuntimeException('Configuración inválida: PUI_OUTBOUND_BASE_URL es obligatorio en modo real.');
         }
 
+        if (PuiOutboundBearerResolver::mustUseJwtLogin()) {
+            $clave = trim((string) self::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+            if ($clave === '') {
+                throw new \RuntimeException(
+                    'Configuración inválida: autenticación saliente por JWT requiere PUI_OUTBOUND_LOGIN_CLAVE (PUI_OUTBOUND_AUTH_MODE=login o tokens vacíos / iguales a la clave).'
+                );
+            }
+            return;
+        }
+
         $token = trim((string) self::get('PUI_OUTBOUND_TOKEN', ''));
         if ($token === '') {
-            throw new \RuntimeException('Configuración inválida: PUI_OUTBOUND_TOKEN es obligatorio en modo real.');
+            throw new \RuntimeException('Configuración inválida: PUI_OUTBOUND_TOKEN es obligatorio en modo real (o configure login saliente con PUI_OUTBOUND_LOGIN_CLAVE).');
         }
         if (stripos($token, 'CHANGE_ME') !== false) {
             throw new \RuntimeException('Configuración inválida: PUI_OUTBOUND_TOKEN debe ser un valor real, no placeholder.');

@@ -127,13 +127,21 @@ class PuiSearchOrchestratorService
             }
         }
 
-        $bf = ['id' => $id, 'institucion_id' => $institucionId];
+        $bf = PuiManualPayloadValidator::normalizarBusquedaFinalizada([
+            'id' => $id,
+            'institucion_id' => $institucionId,
+        ]);
         $verr = PuiManualPayloadValidator::busquedaFinalizada($bf);
         if ($verr !== []) {
             throw new \RuntimeException('Payload busqueda-finalizada inválido: ' . implode('; ', $verr));
         }
+        PuiLogger::info($requestId, 'outbound_busqueda_finalizada_enviando', [
+            'id' => $bf['id'],
+            'institucion_id' => $bf['institucion_id'],
+            'base_url_configurada' => (bool) trim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', '')),
+        ]);
         $rbf = $outbound->busquedaFinalizada($bf);
-        $this->coincidencias->registrarCoincidencia([
+        $this->registrarAuditoriaSaliente($requestId, [
             'evento' => 'busqueda_finalizada',
             'reporte_id' => $id,
             'http_status' => $rbf['http_status'],
@@ -141,22 +149,38 @@ class PuiSearchOrchestratorService
             'endpoint' => 'busqueda-finalizada',
             'payload_json' => json_encode($bf, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
+        $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
+        $abortOn = $abort === '1' || $abort === 1 || $abort === true;
+
         if ((int) ($rbf['http_status'] ?? 0) === 504) {
-            throw new PuiOutboundTimeoutException('busqueda-finalizada timeout');
+            if ($abortOn) {
+                throw new PuiOutboundTimeoutException('busqueda-finalizada timeout');
+            }
+            PuiLogger::warning($requestId, 'outbound_busqueda_finalizada_timeout_continua', [
+                'endpoint' => 'busqueda-finalizada',
+            ]);
+
+            return;
         }
         if ($rbf['http_status'] >= 200 && $rbf['http_status'] < 300) {
-            $this->reportesActivos->marcarFechaFinFase2($id);
+            try {
+                $this->reportesActivos->marcarFechaFinFase2($id);
+            } catch (\Throwable $e) {
+                PuiLogger::warning($requestId, 'marcar_fecha_fin_fase2_error', ['msg' => $e->getMessage(), 'id' => $id]);
+            }
         }
         if ($rbf['http_status'] < 200 || $rbf['http_status'] >= 300) {
-            $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
-            $abortOn = $abort === '1' || $abort === 1 || $abort === true;
             if ($abortOn) {
                 throw new \RuntimeException('busqueda-finalizada HTTP ' . $rbf['http_status']);
             }
-            PuiLogger::warning($requestId, 'outbound_busqueda_finalizada_no_2xx_continua', [
+            $ctx = [
                 'http_status' => $rbf['http_status'],
                 'endpoint' => 'busqueda-finalizada',
-            ]);
+            ];
+            if ((int) ($rbf['http_status'] ?? 0) === 401) {
+                $ctx['ayuda'] = '401: el simulador espera el JWT devuelto por POST …/login (clave PUI_OUTBOUND_LOGIN_CLAVE), no la clave como Bearer. Revise PUI_OUTBOUND_AUTH_MODE=login y reinicie PHP; si usaba PUI_OUTBOUND_TOKEN=clave, defina también PUI_OUTBOUND_LOGIN_CLAVE con el mismo valor.';
+            }
+            PuiLogger::warning($requestId, 'outbound_busqueda_finalizada_no_2xx_continua', $ctx);
         }
     }
 
@@ -246,7 +270,7 @@ class PuiSearchOrchestratorService
             if ($payloadScanJson === false) {
                 $payloadScanJson = '{}';
             }
-            $this->coincidencias->registrarCoincidencia([
+            $this->registrarAuditoriaSaliente($requestId, [
                 'evento' => 'scan_sin_resultados',
                 'reporte_id' => $idReporte,
                 'institucion_id' => $institucionId,
@@ -294,7 +318,7 @@ class PuiSearchOrchestratorService
         }
 
         $r = $outbound->notificarCoincidencia($payload);
-        $this->coincidencias->registrarCoincidencia([
+        $this->registrarAuditoriaSaliente($requestId, [
             'evento' => 'notificar_coincidencia',
             'reporte_id' => $reporteId,
             'institucion_id' => $institucionId,
@@ -305,18 +329,43 @@ class PuiSearchOrchestratorService
             'endpoint' => 'notificar-coincidencia',
             'payload_json' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
+        $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
+        $abortOn = $abort === '1' || $abort === 1 || $abort === true;
+
         if ((int) ($r['http_status'] ?? 0) === 504) {
-            throw new PuiOutboundTimeoutException('notificar-coincidencia timeout');
+            if ($abortOn) {
+                throw new PuiOutboundTimeoutException('notificar-coincidencia timeout');
+            }
+            PuiLogger::warning($requestId, 'outbound_notificar_coincidencia_timeout_continua', [
+                'fase_busqueda' => (string) ($payload['fase_busqueda'] ?? ''),
+            ]);
+
+            return;
         }
         if ($r['http_status'] < 200 || $r['http_status'] >= 300) {
-            $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
-            $abortOn = $abort === '1' || $abort === 1 || $abort === true;
             if ($abortOn) {
                 throw new \RuntimeException('notificar-coincidencia HTTP ' . $r['http_status']);
             }
             PuiLogger::warning($requestId, 'outbound_notificar_coincidencia_no_2xx_continua', [
                 'http_status' => $r['http_status'],
                 'fase_busqueda' => (string) ($payload['fase_busqueda'] ?? ''),
+            ]);
+        }
+    }
+
+    /**
+     * La auditoría en PUI_COINCIDENCIAS no debe impedir §7.2/§7.3 hacia la PUI si Oracle falla al insertar.
+     *
+     * @param array<string,mixed> $linea
+     */
+    private function registrarAuditoriaSaliente(string $requestId, array $linea): void
+    {
+        try {
+            $this->coincidencias->registrarCoincidencia($linea);
+        } catch (\Throwable $e) {
+            PuiLogger::warning($requestId, 'pui_coincidencias_auditoria_no_guardada', [
+                'msg' => $e->getMessage(),
+                'endpoint' => (string) ($linea['endpoint'] ?? ''),
             ]);
         }
     }

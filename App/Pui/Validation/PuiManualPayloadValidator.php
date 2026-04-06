@@ -191,6 +191,21 @@ class PuiManualPayloadValidator
         return $e;
     }
 
+    /**
+     * §7.3 — Cuerpo JSON con id e institucion_id siempre como cadenas.
+     * INI_SCANNER_TYPED puede cargar un RFC solo numérico como int; json_encode lo emitiría sin comillas y la PUI rechaza el cuerpo.
+     *
+     * @param array<string,mixed> $p
+     * @return array{id:string, institucion_id:string}
+     */
+    public static function normalizarBusquedaFinalizada(array $p): array
+    {
+        return [
+            'id' => trim((string) ($p['id'] ?? '')),
+            'institucion_id' => strtoupper(trim((string) ($p['institucion_id'] ?? ''))),
+        ];
+    }
+
     /** §7.3 Búsqueda finalizada — solo id e institucion_id */
     public static function busquedaFinalizada(array $p): array
     {
@@ -220,6 +235,7 @@ class PuiManualPayloadValidator
         $allowed = [
             'id',
             'curp',
+            'institucion_id',
             'nombre',
             'primer_apellido',
             'segundo_apellido',
@@ -240,6 +256,19 @@ class PuiManualPayloadValidator
         foreach (array_keys($p) as $k) {
             if (!in_array((string) $k, $allowed, true)) {
                 $e[] = 'campo no permitido en activar-reporte: ' . $k;
+            }
+        }
+        // Opcional: RFC institución (§8.2 no lo exige; simuladores/pruebas envían el mismo id que en login / §7.3).
+        if (array_key_exists('institucion_id', $p)) {
+            if (!is_string($p['institucion_id'])) {
+                $e[] = 'institucion_id debe ser cadena';
+            } else {
+                $ii = trim($p['institucion_id']);
+                if ($ii === '') {
+                    $e[] = 'institucion_id vacío: omita el campo o use INSTITUCION_RFC en pui.ini';
+                } elseif (!ManualValidators::institucionId($ii)) {
+                    $e[] = 'institucion_id obligatorio RFC 4–13, ^[A-Z0-9]{4,13}$';
+                }
             }
         }
         if (!self::hasString($p, 'id') || $p['id'] === '' || !ManualValidators::idBusqueda($p['id'])) {

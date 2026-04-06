@@ -4,6 +4,7 @@
  *
  * Institución expone (base típica /api/pui):
  *   GET  /api/pui/salud   (sin JWT — comprobación de servicio)
+ *   GET  /api/pui/test-login-simulador (sin JWT — diagnóstico login saliente si PUI_ENABLE_TEST_LOGIN_SIMULADOR=1)
  *   POST /api/pui/login
  *   POST /api/pui/activar-reporte
  *   POST /api/pui/activar-reporte-prueba

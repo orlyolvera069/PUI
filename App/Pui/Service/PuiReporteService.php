@@ -6,6 +6,7 @@ use App\Pui\Config\PuiConfig;
 use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\HttpPuiOutboundClient;
+use App\Pui\Integration\PuiOutboundFactory;
 use App\Pui\Integration\PuiOutboundTimeoutException;
 use App\Pui\Repository\PuiCoincidenciaMemoryRepository;
 use App\Pui\Repository\PuiCoincidenciaOracleRepository;
@@ -130,9 +131,9 @@ class PuiReporteService
         // Normalizamos nuevamente para asegurar consistencia entre validación y persistencia.
         $body['curp'] = $curp;
 
-        $institucionId = strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
+        $institucionId = $this->resolverInstitucionIdParaActivar($body);
         if ($institucionId === '' || !ManualValidators::institucionId($institucionId)) {
-            return $this->err($requestId, 500, 'PUI-CFG-500', 'Configure INSTITUCION_RFC en pui.ini (4–13 caracteres).');
+            return $this->err($requestId, 500, 'PUI-CFG-500', 'Configure INSTITUCION_RFC en pui.ini (4–13 caracteres) o envíe institucion_id en el cuerpo (mismo valor que en login hacia la PUI / simulador).');
         }
 
         $this->estado->guardar($id, [
@@ -160,8 +161,17 @@ class PuiReporteService
             ]);
         }
 
-        $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
-        $this->kickFase3RunnerDaemon();
+        try {
+            $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
+        } catch (\Throwable $e) {
+            // §7.3 ya se envió; el job fase 3 es complementario — no debe revertir la activación.
+            PuiLogger::warning($requestId, 'programar_fase3_error', ['id' => $id, 'msg' => $e->getMessage()]);
+        }
+        try {
+            $this->kickFase3RunnerDaemon();
+        } catch (\Throwable $e) {
+            PuiLogger::warning($requestId, 'kick_fase3_daemon_error', ['msg' => $e->getMessage()]);
+        }
 
         $this->marcarEstado($id, 'ACTIVO');
 
@@ -195,12 +205,80 @@ class PuiReporteService
         $this->estado->marcarInactivo($id);
         $this->jobs->cancelarJobsReporte($id);
 
+        // Notificación saliente automática §7.3 tras cierre local (la PUI recibe el cierre de monitoreo).
+        $this->notificarBusquedaFinalizadaSalienteTrasDesactivar($requestId, $id, $prev);
+
         return [
             'status' => 200,
             'body' => [
-                'message' => 'Registro de finalización de búsqueda histórica guardado correctamente',
+                // Mismo texto que §7.3 respuesta 200 (manual + mock saliente) para que la PUI reconozca la finalización.
+                'message' => 'Registro de finalización de búsqueda histórica guardado correctamente.',
             ],
         ];
+    }
+
+    /**
+     * Tras desactivar en BD, envía POST /busqueda-finalizada hacia la PUI (id + institucion_id).
+     * Errores HTTP solo se registran; la respuesta §8.4 al cliente sigue siendo 200.
+     *
+     * @param array<string,mixed> $prev Registro previo de PUI_REPORTES_ACTIVOS (antes de marcarInactivo).
+     */
+    private function notificarBusquedaFinalizadaSalienteTrasDesactivar(string $requestId, string $idReporte, array $prev): void
+    {
+        try {
+            $inst = strtoupper(trim((string) ($prev['institucion_id'] ?? $prev['INSTITUCION_ID'] ?? '')));
+            if ($inst === '' || !ManualValidators::institucionId($inst)) {
+                PuiLogger::warning($requestId, 'desactivar_busqueda_finalizada_omitida_institucion', ['id' => $idReporte]);
+
+                return;
+            }
+            $bf = PuiManualPayloadValidator::normalizarBusquedaFinalizada([
+                'id' => $idReporte,
+                'institucion_id' => $inst,
+            ]);
+            $verr = PuiManualPayloadValidator::busquedaFinalizada($bf);
+            if ($verr !== []) {
+                PuiLogger::warning($requestId, 'desactivar_busqueda_finalizada_payload_invalido', ['err' => $verr]);
+
+                return;
+            }
+            $esPrueba = !empty($prev['es_prueba'] ?? $prev['ES_PRUEBA'] ?? 0);
+            PuiLogger::info($requestId, 'outbound_busqueda_finalizada_tras_desactivar', [
+                'id' => $bf['id'],
+                'institucion_id' => $bf['institucion_id'],
+            ]);
+            $outbound = PuiOutboundFactory::create($esPrueba);
+            $r = $outbound->busquedaFinalizada($bf);
+            $this->coincidencias->registrarCoincidencia([
+                'evento' => 'busqueda_finalizada_tras_desactivar',
+                'tipo_evento' => 'busqueda_finalizada_tras_desactivar',
+                'reporte_id' => $idReporte,
+                'http_status' => $r['http_status'],
+                'requestId' => $requestId,
+                'endpoint' => 'busqueda-finalizada',
+                'payload_json' => json_encode($bf, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ]);
+            $code = (int) ($r['http_status'] ?? 0);
+            if ($code < 200 || $code >= 300) {
+                PuiLogger::warning($requestId, 'desactivar_busqueda_finalizada_no_2xx', ['http_status' => $code]);
+            }
+        } catch (\Throwable $e) {
+            PuiLogger::warning($requestId, 'desactivar_busqueda_finalizada_error', ['msg' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Mismo RFC que la PUI usa en §7.2/§7.3: por defecto INSTITUCION_RFC; si el cuerpo trae institucion_id (p. ej. simulador XAXX010101000), se usa ese.
+     *
+     * @param array<string,mixed> $body
+     */
+    private function resolverInstitucionIdParaActivar(array $body): string
+    {
+        if (isset($body['institucion_id']) && is_string($body['institucion_id']) && trim($body['institucion_id']) !== '') {
+            return strtoupper(trim($body['institucion_id']));
+        }
+
+        return strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
     }
 
     private function notifyAbortEnabled(): bool

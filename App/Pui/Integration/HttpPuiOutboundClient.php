@@ -3,13 +3,16 @@
 namespace App\Pui\Integration;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Validation\PuiManualPayloadValidator;
 
 /**
  * Cliente HTTP real hacia la PUI (TLS según despliegue institucional).
  *
  * Configuración (pui.ini / env):
  * - PUI_OUTBOUND_BASE_URL: URL base del servicio PUI (ej. https://pui.ejemplo.gob.mx/api/v1)
- * - PUI_OUTBOUND_TOKEN: Bearer token para consumir la PUI (OAuth u otro mecanismo del manual)
+ * - PUI_OUTBOUND_AUTH_MODE: static (default) | login — si login, JWT vía POST PUI_OUTBOUND_LOGIN_PATH con clave/institución
+ * - PUI_OUTBOUND_TOKEN: Bearer estático (modo static)
+ * - PUI_OUTBOUND_TOKEN_NOTIFICAR / PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA: opcionales; si vienen vacíos se usa PUI_OUTBOUND_TOKEN
  * - PUI_PATH_NOTIFICAR_COINCIDENCIA: ruta, default /notificar-coincidencia
  * - PUI_PATH_BUSQUEDA_FINALIZADA: ruta, default /busqueda-finalizada
  * - PUI_HTTP_RETRIES: reintentos (default 3)
@@ -20,13 +23,54 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
     public function notificarCoincidencia(array $payload): array
     {
         $path = (string) PuiConfig::get('PUI_PATH_NOTIFICAR_COINCIDENCIA', '/notificar-coincidencia');
-        return $this->post($path, $payload);
+
+        return $this->post($path, $payload, 'notificar');
     }
 
     public function busquedaFinalizada(array $payload): array
     {
         $path = (string) PuiConfig::get('PUI_PATH_BUSQUEDA_FINALIZADA', '/busqueda-finalizada');
-        return $this->post($path, $payload);
+        $wire = PuiManualPayloadValidator::normalizarBusquedaFinalizada($payload);
+
+        return $this->post($path, $wire, 'busqueda_finalizada');
+    }
+
+    private function usesJwtOutboundAuth(): bool
+    {
+        return PuiOutboundBearerResolver::mustUseJwtLogin();
+    }
+
+    /**
+     * Bearer para salientes: JWT vía login del simulador o token estático por perfil.
+     *
+     * @throws \RuntimeException
+     */
+    private function resolveBearerForOutbound(string $perfil): string
+    {
+        if ($this->usesJwtOutboundAuth()) {
+            $resolver = new PuiOutboundBearerResolver();
+
+            return $resolver->resolveBearer();
+        }
+
+        return $this->tokenSalientePara($perfil);
+    }
+
+    /**
+     * Token Bearer saliente (solo modo static): trim; perfiles opcionales si el simulador usa tokens distintos.
+     */
+    private function tokenSalientePara(string $perfil): string
+    {
+        $especifico = match ($perfil) {
+            'notificar' => trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN_NOTIFICAR', '')),
+            'busqueda_finalizada' => trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA', '')),
+            default => '',
+        };
+        if ($especifico !== '') {
+            return $especifico;
+        }
+
+        return trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN', ''));
     }
 
     /**
@@ -41,9 +85,13 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
         if ($base === '') {
             throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_BASE_URL.');
         }
-        $token = trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN', ''));
-        if ($token === '') {
-            throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_TOKEN.');
+        if ($this->usesJwtOutboundAuth()) {
+            $token = $this->resolveBearerForOutbound('default');
+        } else {
+            $token = $this->tokenSalientePara('default');
+            if ($token === '') {
+                throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_TOKEN o use PUI_OUTBOUND_AUTH_MODE=login.');
+            }
         }
 
         $pingPath = trim((string) PuiConfig::get('PUI_OUTBOUND_PING_PATH', ''));
@@ -82,32 +130,41 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
     }
 
     /** @return array{http_status:int, body:mixed, raw:string} */
-    private function post(string $path, array $payload): array
+    private function post(string $path, array $payload, string $tokenPerfil = 'default'): array
     {
         $base = rtrim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', ''), '/');
         if ($base === '') {
             throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_BASE_URL para modo REAL.');
         }
         $url = $base . ($path !== '' && $path[0] === '/' ? $path : '/' . $path);
-        $token = (string) PuiConfig::get('PUI_OUTBOUND_TOKEN', '');
-        if (trim($token) === '') {
-            throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_TOKEN para modo REAL.');
+        $token = $this->resolveBearerForOutbound($tokenPerfil);
+        if ($token === '') {
+            throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_TOKEN (o login saliente) para modo REAL.');
         }
         $retries = max(1, (int) PuiConfig::get('PUI_HTTP_RETRIES', 3));
         $baseMs = (int) PuiConfig::get('PUI_HTTP_RETRY_MS', 100);
-
-        $headers = [
-            'Content-Type: application/json',
-            'Accept: application/json',
-        ];
-        if ($token !== '') {
-            $headers[] = 'Authorization: Bearer ' . $token;
-        }
+        $jwtAuth = $this->usesJwtOutboundAuth();
 
         $last = ['http_status' => 0, 'body' => null, 'raw' => ''];
         for ($i = 0; $i < $retries; $i++) {
+            $headers = [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'Authorization: Bearer ' . $token,
+            ];
             $last = $this->doPost($url, $headers, $payload);
             $code = $last['http_status'];
+            if ($code === 401 && $jwtAuth) {
+                PuiOutboundBearerResolver::invalidateCache();
+                $token = $this->resolveBearerForOutbound($tokenPerfil);
+                $headers = [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'Authorization: Bearer ' . $token,
+                ];
+                $last = $this->doPost($url, $headers, $payload);
+                $code = $last['http_status'];
+            }
             if ($code === 504) {
                 return $last;
             }

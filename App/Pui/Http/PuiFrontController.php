@@ -4,6 +4,7 @@ namespace App\Pui\Http;
 
 use App\Pui\Config\PuiConfig;
 use App\Pui\Exception\DatabaseUnavailableException;
+use App\Pui\Integration\PuiOutboundBearerResolver;
 use App\Pui\Security\PuiAuthService;
 use App\Pui\Security\PuiRateLimiter;
 use App\Pui\Service\PuiLoginService;
@@ -12,6 +13,7 @@ use App\Pui\Service\PuiReporteService;
 /**
  * Rutas institucionales según Manual Técnico PUI (eventos: activar reporte, desactivar, login JWT).
  * GET /salud — disponible sin JWT (monitoreo).
+ * GET /test-login-simulador — diagnóstico login saliente (PUI_ENABLE_TEST_LOGIN_SIMULADOR=1).
  * Base: PUI_PUBLIC_BASE (p. ej. /api/pui).
  */
 class PuiFrontController
@@ -78,6 +80,30 @@ class PuiFrontController
                         'version' => '1.0.0',
                     ],
                     'status' => 'ok',
+                ]);
+                return;
+            }
+
+            if ($method === 'GET' && $path === '/test-login-simulador') {
+                $probeOn = PuiConfig::get('PUI_ENABLE_TEST_LOGIN_SIMULADOR', '0');
+                $probeEnabled = $probeOn === true || $probeOn === 1 || $probeOn === '1';
+                if (!$probeEnabled) {
+                    $this->emitError($requestId, 403, 'PUI-HTTP-403', 'Operación no permitida.', 'Defina PUI_ENABLE_TEST_LOGIN_SIMULADOR=1 para activar este endpoint de diagnóstico.');
+                    return;
+                }
+                try {
+                    $probe = PuiOutboundBearerResolver::probeBothVariants();
+                } catch (\Throwable $e) {
+                    $this->emitError($requestId, 502, 'PUI-HTTP-502', 'Error al probar login saliente.', $e->getMessage());
+                    return;
+                }
+                $this->sendRaw(200, [
+                    'meta' => [
+                        'requestId' => $requestId,
+                        'timestamp' => gmdate('c'),
+                        'version' => '1.0.0',
+                    ],
+                    'test_login_simulador' => $probe,
                 ]);
                 return;
             }
@@ -253,6 +279,7 @@ class PuiFrontController
         if (in_array($path, [
             '/login',
             '/salud',
+            '/test-login-simulador',
             '/activar-reporte',
             '/activar-reporte-prueba',
             '/desactivar-reporte',
