@@ -134,6 +134,17 @@ class PuiReporteActivoOracleRepository
         if (!$ok) {
             throw new \RuntimeException('No se pudo marcar inactivo el reporte en Oracle.');
         }
+
+        $row = $this->obtener($id);
+        if ($row === null) {
+            throw new \RuntimeException('No se encontró el reporte en Oracle tras desactivar (ID_REPORTE=' . $id . ').');
+        }
+        $activoPost = (int) ($row['ACTIVO'] ?? $row['activo'] ?? 1);
+        if ($activoPost !== 0) {
+            throw new \RuntimeException(
+                'La desactivación no dejó ACTIVO=0 en Oracle (ID_REPORTE=' . $id . '). Revise ID_REPORTE y permisos.'
+            );
+        }
     }
 
     /**

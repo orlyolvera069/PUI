@@ -4,6 +4,7 @@ namespace App\Pui\Service;
 
 use App\Pui\Config\PuiConfig;
 use App\Pui\Http\PuiLogger;
+use App\Pui\Integration\PuiOutboundBearerResolver;
 use App\Pui\Integration\PuiOutboundClientInterface;
 use App\Pui\Integration\PuiOutboundFactory;
 use App\Pui\Integration\PuiOutboundTimeoutException;
@@ -141,9 +142,15 @@ class PuiSearchOrchestratorService
             'base_url_configurada' => (bool) trim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', '')),
         ]);
         $rbf = $outbound->busquedaFinalizada($bf);
+        PuiLogger::info($requestId, 'outbound_busqueda_finalizada_respuesta', [
+            'http_status' => (int) ($rbf['http_status'] ?? 0),
+            'saliente_jwt' => PuiOutboundBearerResolver::mustUseJwtLogin(),
+        ]);
         $this->registrarAuditoriaSaliente($requestId, [
             'evento' => 'busqueda_finalizada',
+            'tipo_evento' => 'busqueda_finalizada',
             'reporte_id' => $id,
+            // Sin fase_busqueda: §7.3 no es "notificación de fase"; el 2 aquí confundía con "atascado en fase 2".
             'http_status' => $rbf['http_status'],
             'requestId' => $requestId,
             'endpoint' => 'busqueda-finalizada',

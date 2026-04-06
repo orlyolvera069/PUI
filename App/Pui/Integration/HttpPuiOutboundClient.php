@@ -202,14 +202,18 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
                 CURLOPT_HTTPHEADER => $headers,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT_MS => $timeoutMs,
+                CURLOPT_FOLLOWLOCATION => false,
             ]);
             $raw = curl_exec($ch);
             $errno = curl_errno($ch);
             $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            // 28 = CURLE_OPERATION_TIMEDOUT (timeout total)
-            if ($raw === false && ($errno === 28 || (defined('CURLE_OPERATION_TIMEDOUT') && $errno === CURLE_OPERATION_TIMEDOUT))) {
-                return ['http_status' => 504, 'body' => null, 'raw' => 'timeout'];
+            if ($raw === false) {
+                if ($errno === 28 || (defined('CURLE_OPERATION_TIMEDOUT') && $errno === CURLE_OPERATION_TIMEDOUT)) {
+                    return ['http_status' => 504, 'body' => null, 'raw' => 'timeout'];
+                }
+
+                return ['http_status' => 502, 'body' => null, 'raw' => 'curl_errno_' . $errno];
             }
         } else {
             $timeoutSec = max(1, (int) ceil(((int) PuiConfig::get('PUI_REMOTE_TIMEOUT_MS', 15000)) / 1000));

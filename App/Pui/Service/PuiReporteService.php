@@ -6,6 +6,7 @@ use App\Pui\Config\PuiConfig;
 use App\Pui\Exception\DatabaseUnavailableException;
 use App\Pui\Http\PuiLogger;
 use App\Pui\Integration\HttpPuiOutboundClient;
+use App\Pui\Integration\PuiOutboundBearerResolver;
 use App\Pui\Integration\PuiOutboundFactory;
 use App\Pui\Integration\PuiOutboundTimeoutException;
 use App\Pui\Repository\PuiCoincidenciaMemoryRepository;
@@ -249,6 +250,10 @@ class PuiReporteService
             ]);
             $outbound = PuiOutboundFactory::create($esPrueba);
             $r = $outbound->busquedaFinalizada($bf);
+            PuiLogger::info($requestId, 'desactivar_busqueda_finalizada_respuesta', [
+                'http_status' => (int) ($r['http_status'] ?? 0),
+                'saliente_jwt' => PuiOutboundBearerResolver::mustUseJwtLogin(),
+            ]);
             $this->coincidencias->registrarCoincidencia([
                 'evento' => 'busqueda_finalizada_tras_desactivar',
                 'tipo_evento' => 'busqueda_finalizada_tras_desactivar',

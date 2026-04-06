@@ -47,12 +47,36 @@ class PuiCoincidenciaOracleRepository
             )
         SQL;
 
+        $tipoEvento = null;
+        if (array_key_exists('tipo_evento', $linea) && $linea['tipo_evento'] !== null) {
+            $t = trim((string) $linea['tipo_evento']);
+            if ($t !== '') {
+                $tipoEvento = $t;
+            }
+        }
+        if ($tipoEvento === null && array_key_exists('evento', $linea) && $linea['evento'] !== null) {
+            $t = trim((string) $linea['evento']);
+            if ($t !== '') {
+                $tipoEvento = $t;
+            }
+        }
+
+        $faseBusqueda = null;
+        if (array_key_exists('fase_busqueda', $linea) && $linea['fase_busqueda'] !== null && trim((string) $linea['fase_busqueda']) !== '') {
+            $faseBusqueda = trim((string) $linea['fase_busqueda']);
+        }
+
+        $httpStatus = null;
+        if (array_key_exists('http_status', $linea) && $linea['http_status'] !== null && $linea['http_status'] !== '') {
+            $httpStatus = (int) $linea['http_status'];
+        }
+
         $ok = $db->insert($sql, [
             'id_reporte' => (string) ($linea['reporte_id'] ?? $linea['id_reporte'] ?? ''),
-            'fase_busqueda' => isset($linea['fase_busqueda']) ? (string) $linea['fase_busqueda'] : null,
-            'tipo_evento' => isset($linea['tipo_evento']) ? (string) $linea['tipo_evento'] : null,
+            'fase_busqueda' => $faseBusqueda,
+            'tipo_evento' => $tipoEvento,
             'payload_json' => $payload,
-            'http_status' => isset($linea['http_status']) ? (int) $linea['http_status'] : null,
+            'http_status' => $httpStatus,
             'request_id' => isset($linea['requestId']) ? (string) $linea['requestId'] : null,
             'endpoint' => isset($linea['endpoint']) ? (string) $linea['endpoint'] : null,
         ]);

@@ -42,6 +42,7 @@ class PuiConfig
         'PUI_OUTBOUND_LOGIN_CLAVE',
         'PUI_OUTBOUND_LOGIN_BODY_STYLE',
         'PUI_OUTBOUND_LOGIN_CACHE_SECONDS',
+        'PUI_OUTBOUND_LOGIN_EXPIRY_MARGIN_SECONDS',
         'PUI_OUTBOUND_TOKEN',
         'PUI_OUTBOUND_TOKEN_NOTIFICAR',
         'PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA',
@@ -233,10 +234,10 @@ class PuiConfig
         }
 
         if (PuiOutboundBearerResolver::mustUseJwtLogin()) {
-            $clave = trim((string) self::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+            $clave = PuiOutboundBearerResolver::effectiveLoginClave();
             if ($clave === '') {
                 throw new \RuntimeException(
-                    'Configuración inválida: autenticación saliente por JWT requiere PUI_OUTBOUND_LOGIN_CLAVE (PUI_OUTBOUND_AUTH_MODE=login o tokens vacíos / iguales a la clave).'
+                    'Configuración inválida: autenticación saliente por JWT requiere PUI_OUTBOUND_LOGIN_CLAVE (o PUI_OUTBOUND_TOKEN con forma simulador_PUI_* solo como clave de login, no como Bearer).'
                 );
             }
             return;

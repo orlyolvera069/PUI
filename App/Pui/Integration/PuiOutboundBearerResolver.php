@@ -14,27 +14,98 @@ class PuiOutboundBearerResolver
 
     private static int $cachedAt = 0;
 
+    /** @var int Tiempo UNIX hasta el cual el JWT en caché sigue siendo válido para reutilizar */
+    private static int $cacheValidUntil = 0;
+
     public static function invalidateCache(): void
     {
         self::$cachedJwt = null;
         self::$cachedAt = 0;
+        self::$cacheValidUntil = 0;
+    }
+
+    /**
+     * Clave para el POST /login: PUI_OUTBOUND_LOGIN_CLAVE, o si está vacía un PUI_OUTBOUND_TOKEN* con forma de clave del simulador (simulador_PUI_NN).
+     */
+    public static function effectiveLoginClave(): string
+    {
+        $c = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+        if ($c !== '') {
+            return $c;
+        }
+        foreach ([
+            trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN', '')),
+            trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN_NOTIFICAR', '')),
+            trim((string) PuiConfig::get('PUI_OUTBOUND_TOKEN_BUSQUEDA_FINALIZADA', '')),
+        ] as $t) {
+            if ($t !== '' && self::looksLikeSimuladorLoginClave($t)) {
+                return $t;
+            }
+        }
+
+        return '';
+    }
+
+    private static function looksLikeSimuladorLoginClave(string $s): bool
+    {
+        return $s !== '' && (bool) preg_match('/^simulador_PUI_[0-9]+$/i', $s);
+    }
+
+    /**
+     * Hosts donde el simulador solo acepta JWT (POST /login), no la clave como Bearer — forzado aunque el INI diga static.
+     */
+    private static function outboundHostRequiresSimuladorJwt(): bool
+    {
+        $base = trim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', ''));
+        if ($base === '') {
+            return false;
+        }
+        if (!preg_match('#^[a-z][a-z0-9+.-]*://#i', $base)) {
+            $base = 'https://' . $base;
+        }
+        $host = strtolower((string) parse_url($base, PHP_URL_HOST));
+        if ($host === '') {
+            return false;
+        }
+        if ($host === 'demo-pui.adssivo.mx') {
+            return true;
+        }
+        // Simulador Node en el repo (Simulador/server.js): mismo contrato JWT que demo-pui.
+        return in_array($host, ['localhost', '127.0.0.1', '[::1]'], true);
+    }
+
+    /**
+     * Si INSTITUCION_RFC ≠ PUI_OUTBOUND_LOGIN_INSTITUCION_ID, probar primero login con usuario+PUI (JWT sub=PUI),
+     * que suele aceptar payloads con otro institucion_id en §7.3.
+     */
+    private static function shouldPreferUsuarioLoginFirst(): bool
+    {
+        $rfc = strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
+        $loginInst = strtoupper(trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_INSTITUCION_ID', '')));
+
+        return $rfc !== '' && $loginInst !== '' && $rfc !== $loginInst;
     }
 
     /**
      * true si el Bearer saliente debe obtenerse vía POST /login (JWT), no como cadena fija en ini.
      *
+     * - URL base demo-pui.adssivo.mx o localhost/127.0.0.1 (simulador local en repo)
      * - PUI_OUTBOUND_AUTH_MODE=login
-     * - Sin tokens estáticos pero con PUI_OUTBOUND_LOGIN_CLAVE (login implícito)
-     * - Cualquier PUI_OUTBOUND_TOKEN* igual a PUI_OUTBOUND_LOGIN_CLAVE (error típico: usar la clave del simulador como Bearer)
+     * - Sin tokens estáticos pero con clave de login (PUI_OUTBOUND_LOGIN_CLAVE o inferida tipo simulador_PUI_*)
+     * - Cualquier PUI_OUTBOUND_TOKEN* igual a esa clave (error típico: misma cadena en token y en login)
      */
     public static function mustUseJwtLogin(): bool
     {
+        if (self::outboundHostRequiresSimuladorJwt()) {
+            return true;
+        }
+
         $mode = strtolower(trim((string) PuiConfig::get('PUI_OUTBOUND_AUTH_MODE', 'static')));
         if ($mode === 'login') {
             return true;
         }
 
-        $clave = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+        $clave = self::effectiveLoginClave();
         if ($clave === '') {
             return false;
         }
@@ -71,15 +142,45 @@ class PuiOutboundBearerResolver
 
     private function resolveLoginCached(): string
     {
-        $ttl = max(60, (int) PuiConfig::get('PUI_OUTBOUND_LOGIN_CACHE_SECONDS', 3300));
-        if (self::$cachedJwt !== null && self::$cachedJwt !== '' && (time() - self::$cachedAt) < $ttl) {
+        $now = time();
+        if (self::$cachedJwt !== null && self::$cachedJwt !== '' && $now < self::$cacheValidUntil) {
             return self::$cachedJwt;
         }
         $jwt = $this->fetchLoginTokenWithStyle();
+        $ttlCfg = max(60, (int) PuiConfig::get('PUI_OUTBOUND_LOGIN_CACHE_SECONDS', 3300));
+        $margin = max(30, (int) PuiConfig::get('PUI_OUTBOUND_LOGIN_EXPIRY_MARGIN_SECONDS', 120));
+        $ttl = $ttlCfg;
+        $expAt = self::jwtExpiresAtUnix($jwt);
+        if ($expAt !== null) {
+            $untilExp = $expAt - $now - $margin;
+            $ttl = min($ttlCfg, max(60, $untilExp));
+        }
         self::$cachedJwt = $jwt;
-        self::$cachedAt = time();
+        self::$cachedAt = $now;
+        self::$cacheValidUntil = $now + (int) $ttl;
 
         return $jwt;
+    }
+
+    /** @return int|null exp del JWT (Unix) si el payload es decodificable */
+    private static function jwtExpiresAtUnix(string $jwt): ?int
+    {
+        $parts = explode('.', $jwt);
+        if (count($parts) < 2) {
+            return null;
+        }
+        $b64 = $parts[1];
+        $b64 .= str_repeat('=', (4 - strlen($b64) % 4) % 4);
+        $raw = base64_decode(strtr($b64, '-_', '+/'), true);
+        if ($raw === false) {
+            return null;
+        }
+        $payload = json_decode($raw, true);
+        if (!is_array($payload) || !isset($payload['exp'])) {
+            return null;
+        }
+
+        return (int) $payload['exp'];
     }
 
     /**
@@ -100,23 +201,44 @@ class PuiOutboundBearerResolver
         }
 
         $parts = [];
-        try {
-            $rA = $this->loginRequest($this->bodyVariantInstitucionId());
-            if ($rA['http_status'] >= 200 && $rA['http_status'] < 300) {
-                return $this->extractTokenFromLoginResult($rA);
+        if (self::shouldPreferUsuarioLoginFirst()) {
+            try {
+                $rB = $this->loginRequest($this->bodyVariantUsuario());
+                if ($rB['http_status'] >= 200 && $rB['http_status'] < 300) {
+                    return $this->extractTokenFromLoginResult($rB);
+                }
+                $parts[] = 'variante usuario HTTP ' . $rB['http_status'];
+            } catch (\Throwable $e) {
+                $parts[] = 'variante usuario: ' . $e->getMessage();
             }
-            $parts[] = 'variante institucion_id HTTP ' . $rA['http_status'];
-        } catch (\Throwable $e) {
-            $parts[] = 'variante institucion_id: ' . $e->getMessage();
-        }
-        try {
-            $rB = $this->loginRequest($this->bodyVariantUsuario());
-            if ($rB['http_status'] >= 200 && $rB['http_status'] < 300) {
-                return $this->extractTokenFromLoginResult($rB);
+            try {
+                $rA = $this->loginRequest($this->bodyVariantInstitucionId());
+                if ($rA['http_status'] >= 200 && $rA['http_status'] < 300) {
+                    return $this->extractTokenFromLoginResult($rA);
+                }
+                $parts[] = 'variante institucion_id HTTP ' . $rA['http_status'];
+            } catch (\Throwable $e) {
+                $parts[] = 'variante institucion_id: ' . $e->getMessage();
             }
-            $parts[] = 'variante usuario HTTP ' . $rB['http_status'];
-        } catch (\Throwable $e) {
-            $parts[] = 'variante usuario: ' . $e->getMessage();
+        } else {
+            try {
+                $rA = $this->loginRequest($this->bodyVariantInstitucionId());
+                if ($rA['http_status'] >= 200 && $rA['http_status'] < 300) {
+                    return $this->extractTokenFromLoginResult($rA);
+                }
+                $parts[] = 'variante institucion_id HTTP ' . $rA['http_status'];
+            } catch (\Throwable $e) {
+                $parts[] = 'variante institucion_id: ' . $e->getMessage();
+            }
+            try {
+                $rB = $this->loginRequest($this->bodyVariantUsuario());
+                if ($rB['http_status'] >= 200 && $rB['http_status'] < 300) {
+                    return $this->extractTokenFromLoginResult($rB);
+                }
+                $parts[] = 'variante usuario HTTP ' . $rB['http_status'];
+            } catch (\Throwable $e) {
+                $parts[] = 'variante usuario: ' . $e->getMessage();
+            }
         }
 
         throw new \RuntimeException('Login al simulador (auto) falló: ' . implode('; ', $parts));
@@ -128,9 +250,9 @@ class PuiOutboundBearerResolver
     private function bodyVariantInstitucionId(): array
     {
         $id = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_INSTITUCION_ID', ''));
-        $clave = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+        $clave = self::effectiveLoginClave();
         if ($id === '' || $clave === '') {
-            throw new \RuntimeException('PUI_OUTBOUND_LOGIN_INSTITUCION_ID y PUI_OUTBOUND_LOGIN_CLAVE son obligatorios para login (variante institucion_id).');
+            throw new \RuntimeException('PUI_OUTBOUND_LOGIN_INSTITUCION_ID y clave de login (PUI_OUTBOUND_LOGIN_CLAVE o token tipo simulador_PUI_*) son obligatorios para login (variante institucion_id).');
         }
 
         return ['institucion_id' => $id, 'clave' => $clave];
@@ -142,9 +264,9 @@ class PuiOutboundBearerResolver
     private function bodyVariantUsuario(): array
     {
         $u = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_USUARIO', 'PUI'));
-        $clave = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+        $clave = self::effectiveLoginClave();
         if ($clave === '') {
-            throw new \RuntimeException('PUI_OUTBOUND_LOGIN_CLAVE es obligatoria para login (variante usuario).');
+            throw new \RuntimeException('Clave de login obligatoria: PUI_OUTBOUND_LOGIN_CLAVE o PUI_OUTBOUND_TOKEN con forma simulador_PUI_* (variante usuario).');
         }
 
         return ['usuario' => $u, 'clave' => $clave];
@@ -244,12 +366,12 @@ class PuiOutboundBearerResolver
         ];
 
         $id = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_INSTITUCION_ID', ''));
-        $clave = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_CLAVE', ''));
+        $clave = self::effectiveLoginClave();
         if ($id !== '' && $clave !== '') {
             $ra = $resolver->loginRequestPublicForProbe(['institucion_id' => $id, 'clave' => $clave], 'institucion_id');
             $out['variante_a_institucion_id'] = self::summarizeProbe($ra);
         } else {
-            $out['variante_a_institucion_id'] = ['error_config' => 'Defina PUI_OUTBOUND_LOGIN_INSTITUCION_ID y PUI_OUTBOUND_LOGIN_CLAVE para probar variante A.'];
+            $out['variante_a_institucion_id'] = ['error_config' => 'Defina PUI_OUTBOUND_LOGIN_INSTITUCION_ID y clave (PUI_OUTBOUND_LOGIN_CLAVE o token simulador_PUI_*) para probar variante A.'];
         }
 
         $u = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_USUARIO', 'PUI'));
