@@ -24,8 +24,9 @@ use App\Pui\Validation\PuiManualPayloadValidator;
 class PuiReporteService
 {
     // Manual: tipo_evento permite sólo caracteres restringidos (incluye '-' pero no '—').
+    // Ejemplo oficial §7.2 (manual_ejemplos.json): "Apertura de cuenta bancaria" para evento histórico.
     public const TIPO_F1 = 'Búsqueda fase 1 - datos básicos';
-    public const TIPO_F2 = 'Búsqueda fase 2 - histórica';
+    public const TIPO_F2 = 'Apertura de cuenta bancaria';
     public const TIPO_F3 = 'Búsqueda fase 3 - continua';
 
     private PuiReporteActivoOracleRepository|PuiReporteActivoMemoryRepository $estado;
@@ -73,6 +74,13 @@ class PuiReporteService
             return $this->err($requestId, 400, 'PUI-VAL-400', implode('; ', $err));
         }
 
+        PuiLogger::info($requestId, 'activar_reporte_recibido', [
+            // id sin trim: debe coincidir byte a byte con el JSON del simulador (reportes.json) en §7.2.
+            'id' => (string) ($body['id'] ?? ''),
+            'curp' => (string) ($body['curp'] ?? ''),
+            'es_prueba' => $esPrueba,
+        ]);
+
         if ($esPrueba && !PuiConfig::isSimulationMode()) {
             try {
                 (new HttpPuiOutboundClient())->verificarConectividadSaliente();
@@ -82,7 +90,7 @@ class PuiReporteService
             }
         }
 
-        $id = trim((string) $body['id']);
+        $id = (string) $body['id'];
         try {
             return $this->ejecutarPipelineActivacion($requestId, $body, $esPrueba, $id);
         } catch (PuiOutboundTimeoutException $e) {
@@ -164,6 +172,10 @@ class PuiReporteService
 
         try {
             $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
+            PuiLogger::info($requestId, 'fase3_registrada', [
+                'id_reporte' => $id,
+                'intervalo_minutos' => 15,
+            ]);
         } catch (\Throwable $e) {
             // §7.3 ya se envió; el job fase 3 es complementario — no debe revertir la activación.
             PuiLogger::warning($requestId, 'programar_fase3_error', ['id' => $id, 'msg' => $e->getMessage()]);
@@ -197,7 +209,7 @@ class PuiReporteService
             return $this->err($requestId, 400, 'PUI-VAL-400', implode('; ', $err));
         }
 
-        $id = trim((string) $body['id']);
+        $id = (string) $body['id'];
         $prev = $this->estado->obtener($id);
         if ($prev === null) {
             return $this->err($requestId, 404, 'PUI-NOT-FOUND', 'Reporte no encontrado.');
@@ -219,7 +231,7 @@ class PuiReporteService
     }
 
     /**
-     * Tras desactivar en BD, envía POST /busqueda-finalizada hacia la PUI (id + institucion_id).
+     * Tras desactivar en BD, envía POST /busqueda-finalizada hacia la PUI (id + institucion_id, §7.3).
      * Errores HTTP solo se registran; la respuesta §8.4 al cliente sigue siendo 200.
      *
      * @param array<string,mixed> $prev Registro previo de PUI_REPORTES_ACTIVOS (antes de marcarInactivo).

@@ -250,9 +250,12 @@ class PuiOutboundBearerResolver
     private function bodyVariantInstitucionId(): array
     {
         $id = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_INSTITUCION_ID', ''));
+        if ($id === '') {
+            $id = strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
+        }
         $clave = self::effectiveLoginClave();
         if ($id === '' || $clave === '') {
-            throw new \RuntimeException('PUI_OUTBOUND_LOGIN_INSTITUCION_ID y clave de login (PUI_OUTBOUND_LOGIN_CLAVE o token tipo simulador_PUI_*) son obligatorios para login (variante institucion_id).');
+            throw new \RuntimeException('PUI_OUTBOUND_LOGIN_INSTITUCION_ID (o INSTITUCION_RFC) y clave de login (PUI_OUTBOUND_LOGIN_CLAVE o token tipo simulador_PUI_*) son obligatorios para login (variante institucion_id).');
         }
 
         return ['institucion_id' => $id, 'clave' => $clave];
@@ -366,6 +369,9 @@ class PuiOutboundBearerResolver
         ];
 
         $id = trim((string) PuiConfig::get('PUI_OUTBOUND_LOGIN_INSTITUCION_ID', ''));
+        if ($id === '') {
+            $id = strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
+        }
         $clave = self::effectiveLoginClave();
         if ($id !== '' && $clave !== '') {
             $ra = $resolver->loginRequestPublicForProbe(['institucion_id' => $id, 'clave' => $clave], 'institucion_id');

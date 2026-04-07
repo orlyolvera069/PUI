@@ -15,6 +15,9 @@ class Database
     private $configuracion;
     public $db_activa;
 
+    /** Una vez por proceso si PUI_DB_SESSION_DEBUG=1: USER, CURRENT_SCHEMA, COUNT(EVENTO). */
+    private static bool $oracleSessionDiagLogged = false;
+
     function __construct($s = null, $u = null, $p = null)
     {
         $this->configuracion = App::getConfig();
@@ -26,12 +29,18 @@ class Database
         $s = $this->configuracion[$s] ?? $s;
         $servidor = $s ?? $this->configuracion['SERVIDOR'];
         $esquema = $this->configuracion['ESQUEMA'] ?? 'ESIACOM';
+        $puerto = $this->configuracion['PUERTO'] ?? 1521;
+        $puerto = is_numeric($puerto) ? (int) $puerto : 1521;
+        if ($puerto < 1 || $puerto > 65535) {
+            $puerto = 1521;
+        }
 
-        $cadena = "oci:dbname=//$servidor:1521/$esquema;charset=UTF8";
+        $cadena = "oci:dbname=//$servidor:$puerto/$esquema;charset=UTF8";
         $usuario = $u ?? $this->configuracion['USUARIO'];
         $password = $p ?? $this->configuracion['PASSWORD'];
         try {
             $this->db_activa =  new PDO($cadena, $usuario, $password);
+            $this->maybeLogOracleSessionDiagnostics($servidor, $puerto, (string) $esquema, (string) $usuario, $cadena);
         } catch (\PDOException $e) {
             $this->db_activa = null;
             $uri = (string) ($_SERVER['REQUEST_URI'] ?? '');
@@ -41,6 +50,128 @@ class Database
                 return;
             }
             self::baseNoDisponible("{$e->getMessage()}\nDatos de conexión: $cadena\nUsuario: $usuario\nPassword: (oculto)");
+        }
+    }
+
+    /**
+     * Diagnóstico: misma sesión que ejecuta las queries del padrón (USER, schema efectivo, filas en EVENTO).
+     * Activar con PUI_DB_SESSION_DEBUG=1 en App/config/pui.ini.
+     *
+     * @param mixed $servidor
+     */
+    private function maybeLogOracleSessionDiagnostics(
+        $servidor,
+        int $puerto,
+        string $serviceName,
+        string $usuarioIni,
+        string $dsn
+    ): void {
+        if ($this->db_activa === null || self::$oracleSessionDiagLogged) {
+            return;
+        }
+        if (!class_exists(\App\Pui\Config\PuiConfig::class) || !class_exists(\App\Pui\Http\PuiLogger::class)) {
+            return;
+        }
+        try {
+            $enabled = \App\Pui\Config\PuiConfig::get('PUI_DB_SESSION_DEBUG', '0');
+        } catch (\Throwable $e) {
+            return;
+        }
+        if ($enabled !== '1' && $enabled !== 1 && $enabled !== true) {
+            return;
+        }
+
+        self::$oracleSessionDiagLogged = true;
+
+        $rid = \App\Pui\Http\PuiLogger::requestContextId();
+        $padronSchema = '';
+        try {
+            $padronSchema = trim((string) \App\Pui\Config\PuiConfig::get('PUI_PADRON_SCHEMA', ''));
+        } catch (\Throwable $e) {
+            $padronSchema = '';
+        }
+
+        $ctxBase = [
+            'config_host' => (string) $servidor,
+            'config_puerto' => $puerto,
+            'config_service_name' => $serviceName,
+            'config_usuario_ini' => $usuarioIni,
+            'dsn_sin_password' => $dsn,
+            'pui_padron_schema_ini' => $padronSchema !== '' ? $padronSchema : null,
+        ];
+        \App\Pui\Http\PuiLogger::info($rid, 'oracle_db_conexion_config', $ctxBase);
+
+        $user = $this->oracleScalar("SELECT USER FROM DUAL");
+        $currSchema = $this->oracleScalar("SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM DUAL");
+
+        \App\Pui\Http\PuiLogger::info($rid, 'oracle_db_session_identity', [
+            'SESSION_USER' => $user,
+            'CURRENT_SCHEMA' => $currSchema,
+        ]);
+
+        $countUnqual = $this->oracleCountSafe('SELECT COUNT(*) AS CNT FROM EVENTO');
+        \App\Pui\Http\PuiLogger::info($rid, 'oracle_db_count_evento', [
+            'tabla' => 'EVENTO',
+            'resultado' => $countUnqual,
+        ]);
+
+        foreach (['PUI', 'ESIACOM'] as $sch) {
+            $q = "SELECT COUNT(*) AS CNT FROM {$sch}.EVENTO";
+            $r = $this->oracleCountSafe($q);
+            \App\Pui\Http\PuiLogger::info($rid, 'oracle_db_count_evento', [
+                'tabla' => "{$sch}.EVENTO",
+                'resultado' => $r,
+            ]);
+        }
+
+        if ($padronSchema !== '' && preg_match('/^[A-Za-z0-9_]+$/', $padronSchema)) {
+            $ps = strtoupper($padronSchema);
+            $q = "SELECT COUNT(*) AS CNT FROM {$ps}.EVENTO";
+            $r = $this->oracleCountSafe($q);
+            \App\Pui\Http\PuiLogger::info($rid, 'oracle_db_count_evento', [
+                'tabla' => "{$ps}.EVENTO (PUI_PADRON_SCHEMA)",
+                'resultado' => $r,
+            ]);
+        }
+    }
+
+    private function oracleScalar(string $sql): ?string
+    {
+        try {
+            $stmt = $this->db_activa->query($sql);
+            if ($stmt === false) {
+                return null;
+            }
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row === false || $row === []) {
+                return null;
+            }
+
+            return (string) reset($row);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{ok:bool, count?:int, error?:string}
+     */
+    private function oracleCountSafe(string $sql): array
+    {
+        try {
+            $stmt = $this->db_activa->query($sql);
+            if ($stmt === false) {
+                return ['ok' => false, 'error' => 'query devolvió false'];
+            }
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row === false || $row === []) {
+                return ['ok' => false, 'error' => 'sin fila'];
+            }
+            $v = reset($row);
+
+            return ['ok' => true, 'count' => (int) $v];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'error' => $e->getMessage()];
         }
     }
 

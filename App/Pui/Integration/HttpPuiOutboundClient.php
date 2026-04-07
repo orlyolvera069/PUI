@@ -24,8 +24,9 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
     public function notificarCoincidencia(array $payload): array
     {
         $path = (string) PuiConfig::get('PUI_PATH_NOTIFICAR_COINCIDENCIA', '/notificar-coincidencia');
+        $wire = PuiManualPayloadValidator::normalizarNotificarCoincidencia($payload);
 
-        return $this->post($path, $payload, 'notificar');
+        return $this->post($path, $wire, 'notificar');
     }
 
     public function busquedaFinalizada(array $payload): array

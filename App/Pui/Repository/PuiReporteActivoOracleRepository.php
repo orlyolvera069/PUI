@@ -30,7 +30,8 @@ class PuiReporteActivoOracleRepository
                     :rfc_criterio AS RFC_CRITERIO,
                     :estado AS ESTADO,
                     :es_prueba AS ES_PRUEBA,
-                    :activo AS ACTIVO
+                    :activo AS ACTIVO,
+                    0 AS NUM_COINCIDENCIAS
                 FROM DUAL
             ) S
             ON (T.ID_REPORTE = S.ID_REPORTE)
@@ -48,8 +49,8 @@ class PuiReporteActivoOracleRepository
                     T.ULTIMA_BUSQUEDA = SYSTIMESTAMP,
                     T.FECHA_DESACTIVACION = CASE WHEN S.ACTIVO = 0 THEN SYSTIMESTAMP ELSE NULL END
             WHEN NOT MATCHED THEN
-                INSERT (ID_REPORTE, CURP, INSTITUCION_ID, CRITERIO_NOMBRE, PRIMER_APELLIDO, SEGUNDO_APELLIDO, RFC_CRITERIO, ESTADO, ES_PRUEBA, ACTIVO, FECHA_ACTIVACION, ULTIMA_BUSQUEDA)
-                VALUES (S.ID_REPORTE, S.CURP, S.INSTITUCION_ID, S.CRITERIO_NOMBRE, S.PRIMER_APELLIDO, S.SEGUNDO_APELLIDO, S.RFC_CRITERIO, S.ESTADO, S.ES_PRUEBA, S.ACTIVO, SYSTIMESTAMP, SYSTIMESTAMP)
+                INSERT (ID_REPORTE, CURP, INSTITUCION_ID, CRITERIO_NOMBRE, PRIMER_APELLIDO, SEGUNDO_APELLIDO, RFC_CRITERIO, ESTADO, ES_PRUEBA, ACTIVO, NUM_COINCIDENCIAS, FECHA_ACTIVACION, ULTIMA_BUSQUEDA)
+                VALUES (S.ID_REPORTE, S.CURP, S.INSTITUCION_ID, S.CRITERIO_NOMBRE, S.PRIMER_APELLIDO, S.SEGUNDO_APELLIDO, S.RFC_CRITERIO, S.ESTADO, S.ES_PRUEBA, S.ACTIVO, S.NUM_COINCIDENCIAS, SYSTIMESTAMP, SYSTIMESTAMP)
         SQL;
 
         $ok = $db->insert($sql, [
@@ -95,7 +96,8 @@ class PuiReporteActivoOracleRepository
                 TO_CHAR(ULTIMA_BUSQUEDA, 'YYYY-MM-DD"T"HH24:MI:SS') AS ULTIMA_BUSQUEDA,
                 TO_CHAR(FECHA_DESACTIVACION, 'YYYY-MM-DD"T"HH24:MI:SS') AS FECHA_DESACTIVACION,
                 TO_CHAR(FECHA_FIN_FASE2, 'YYYY-MM-DD"T"HH24:MI:SS') AS FECHA_FIN_FASE2,
-                TO_CHAR(ULTIMA_EJECUCION_FASE3, 'YYYY-MM-DD"T"HH24:MI:SS') AS ULTIMA_EJECUCION_FASE3
+                TO_CHAR(ULTIMA_EJECUCION_FASE3, 'YYYY-MM-DD"T"HH24:MI:SS') AS ULTIMA_EJECUCION_FASE3,
+                NUM_COINCIDENCIAS
             FROM PUI_REPORTES_ACTIVOS
             WHERE ID_REPORTE = :id_reporte
         SQL;
@@ -184,6 +186,27 @@ class PuiReporteActivoOracleRepository
         $ok = $db->insert($sql, ['id_reporte' => $idReporte]);
         if (!$ok) {
             throw new \RuntimeException('No se pudo actualizar ULTIMA_EJECUCION_FASE3.');
+        }
+    }
+
+    /**
+     * Incrementa el total de notificaciones §7.2 (notificar-coincidencia) con HTTP 2xx para el reporte.
+     */
+    public function incrementarNumCoincidencias(string $idReporte): void
+    {
+        $db = new Database();
+        if ($db->db_activa === null) {
+            PuiLogger::throwDatabaseUnavailable();
+        }
+        $sql = <<<SQL
+            UPDATE PUI_REPORTES_ACTIVOS
+            SET NUM_COINCIDENCIAS = NVL(NUM_COINCIDENCIAS, 0) + 1,
+                ULTIMA_BUSQUEDA = SYSTIMESTAMP
+            WHERE ID_REPORTE = :id_reporte
+        SQL;
+        $ok = $db->insert($sql, ['id_reporte' => $idReporte]);
+        if (!$ok) {
+            throw new \RuntimeException('No se pudo incrementar NUM_COINCIDENCIAS.');
         }
     }
 }

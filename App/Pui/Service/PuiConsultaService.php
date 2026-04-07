@@ -61,18 +61,16 @@ class PuiConsultaService
     public function busquedaGeneral(string $requestId, array $criterios): array
     {
         $curp = isset($criterios['curp']) ? ManualValidators::normalizeCurp((string) $criterios['curp']) : null;
-        $nombre = isset($criterios['nombre']) ? trim((string) $criterios['nombre']) : null;
-        $rfc = isset($criterios['rfc']) ? strtoupper(trim((string) $criterios['rfc'])) : null;
         $limite = isset($criterios['limite']) ? (int) $criterios['limite'] : 20;
 
-        if (($curp === null || $curp === '') && ($nombre === null || $nombre === '') && ($rfc === null || $rfc === '')) {
-            return $this->err($requestId, 400, 'PUI-VAL-400', 'Debe enviar al menos un criterio: curp, nombre o rfc.');
+        if ($curp === null || $curp === '') {
+            return $this->err($requestId, 400, 'PUI-VAL-400', 'Debe enviar curp (único criterio de búsqueda permitido).');
         }
-        if ($curp !== null && $curp !== '' && !ManualValidators::curpOficial($curp)) {
+        if (!ManualValidators::curpOficial($curp)) {
             return $this->err($requestId, 400, 'PUI-VAL-400', 'CURP inválida en criterio de búsqueda.');
         }
 
-        $rows = $this->cl->busquedaGeneral($curp, $nombre, $rfc, $limite);
+        $rows = $this->cl->busquedaGeneral($curp, $limite);
         $resultados = [];
         foreach ($rows as $row) {
             $resultados[] = $this->mapPersonaSimple($row);

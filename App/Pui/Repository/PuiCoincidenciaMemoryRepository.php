@@ -36,4 +36,19 @@ class PuiCoincidenciaMemoryRepository
 
         return false;
     }
+
+    public function contarNotificacionesPorReporte(string $idReporte): int
+    {
+        $n = 0;
+        foreach (self::$eventos as $ev) {
+            $rid = (string) ($ev['reporte_id'] ?? $ev['id_reporte'] ?? '');
+            $ep = (string) ($ev['endpoint'] ?? '');
+            $http = (int) ($ev['http_status'] ?? 0);
+            if ($rid === $idReporte && $ep === 'notificar-coincidencia' && $http >= 200 && $http < 300) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
 }

@@ -15,7 +15,6 @@ class PuiReporteActivoMemoryRepository
      */
     public function guardar(string $id, array $registro): void
     {
-        $id = trim($id);
         $prev = self::$rows[$id] ?? [];
         $activo = !array_key_exists('activo', $registro) || !empty($registro['activo']) ? 1 : 0;
         $row = [
@@ -34,6 +33,7 @@ class PuiReporteActivoMemoryRepository
             'FECHA_DESACTIVACION' => $activo === 0 ? gmdate('Y-m-d\TH:i:s') : null,
             'FECHA_FIN_FASE2' => $prev['FECHA_FIN_FASE2'] ?? null,
             'ULTIMA_EJECUCION_FASE3' => $prev['ULTIMA_EJECUCION_FASE3'] ?? null,
+            'NUM_COINCIDENCIAS' => (int) ($prev['NUM_COINCIDENCIAS'] ?? 0),
         ];
         self::$rows[$id] = $row;
     }
@@ -43,7 +43,7 @@ class PuiReporteActivoMemoryRepository
      */
     public function obtener(string $id): ?array
     {
-        return self::$rows[trim($id)] ?? null;
+        return self::$rows[$id] ?? null;
     }
 
     public function estaActivo(string $id): bool
@@ -57,7 +57,6 @@ class PuiReporteActivoMemoryRepository
 
     public function marcarInactivo(string $id): void
     {
-        $id = trim($id);
         if (!isset(self::$rows[$id])) {
             return;
         }
@@ -69,7 +68,6 @@ class PuiReporteActivoMemoryRepository
 
     public function marcarFechaFinFase2(string $idReporte): void
     {
-        $idReporte = trim($idReporte);
         if (!isset(self::$rows[$idReporte])) {
             return;
         }
@@ -78,10 +76,18 @@ class PuiReporteActivoMemoryRepository
 
     public function actualizarUltimaEjecucionFase3(string $idReporte): void
     {
-        $idReporte = trim($idReporte);
         if (!isset(self::$rows[$idReporte])) {
             return;
         }
         self::$rows[$idReporte]['ULTIMA_EJECUCION_FASE3'] = gmdate('Y-m-d\TH:i:s');
+    }
+
+    public function incrementarNumCoincidencias(string $idReporte): void
+    {
+        if (!isset(self::$rows[$idReporte])) {
+            return;
+        }
+        self::$rows[$idReporte]['NUM_COINCIDENCIAS'] = (int) (self::$rows[$idReporte]['NUM_COINCIDENCIAS'] ?? 0) + 1;
+        self::$rows[$idReporte]['ULTIMA_BUSQUEDA'] = gmdate('Y-m-d\TH:i:s');
     }
 }

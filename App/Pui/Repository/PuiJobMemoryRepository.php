@@ -10,7 +10,7 @@ class PuiJobMemoryRepository
     /** @var array<string, array<string, mixed>> clave: JOB_TYPE . '|' . ID_REPORTE */
     private static array $jobs = [];
 
-    public function programarFase3(string $idReporte, bool $esPrueba, int $intervalMinutes = 15): void
+    public function programarFase3(string $idReporte, bool $esPrueba, int $intervalMinutes = 15, ?string $requestId = null): void
     {
         $k = PuiJobOracleRepository::JOB_FASE3_SCAN . '|' . $idReporte;
         self::$jobs[$k] = [

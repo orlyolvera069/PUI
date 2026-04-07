@@ -53,18 +53,32 @@ class PuiFrontController
                     return;
                 }
                 $body = $this->readJsonBody();
-                $unknown = $this->unknownKeys($body, ['usuario', 'clave']);
-                $missing = $this->missingKeys($body, ['usuario', 'clave']);
-                if ($body === [] || $missing !== [] || $unknown !== []) {
-                    $detalle = $missing !== [] ? ('Faltan campos: ' . implode(', ', $missing)) : 'JSON inválido o vacío.';
-                    if ($unknown !== []) {
-                        $detalle = 'Campos no permitidos: ' . implode(', ', $unknown);
-                    }
+                $unknown = $this->unknownKeys($body, ['usuario', 'clave', 'institucion_id']);
+                if ($body === [] || $unknown !== []) {
+                    $detalle = $unknown !== [] ? ('Campos no permitidos: ' . implode(', ', $unknown)) : 'JSON inválido o vacío.';
                     $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', $detalle);
                     return;
                 }
-                if (!is_string($body['usuario']) || !is_string($body['clave'])) {
-                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'usuario y clave deben ser cadenas.');
+                if (!array_key_exists('clave', $body) || !is_string($body['clave'])) {
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'Falta clave o no es cadena.');
+                    return;
+                }
+                $usuarioRaw = isset($body['usuario']) && is_string($body['usuario']) ? trim($body['usuario']) : '';
+                $instRaw = isset($body['institucion_id']) && is_string($body['institucion_id']) ? trim($body['institucion_id']) : '';
+                if ($usuarioRaw === '' && $instRaw === '') {
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'Indique usuario (§8.1) o institucion_id igual a INSTITUCION_RFC en pui.ini.');
+                    return;
+                }
+                if ($usuarioRaw === '' && $instRaw !== '') {
+                    $rfcCfg = strtoupper(trim((string) PuiConfig::get('INSTITUCION_RFC', '')));
+                    if ($rfcCfg === '' || strtoupper($instRaw) !== $rfcCfg) {
+                        $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'institucion_id debe coincidir con INSTITUCION_RFC configurado, o use usuario "PUI" (§8.1).');
+                        return;
+                    }
+                    $body['usuario'] = 'PUI';
+                }
+                if (!is_string($body['usuario'] ?? null)) {
+                    $this->emitError($requestId, 400, 'PUI-VAL-400', 'Solicitud inválida.', 'usuario debe ser cadena.');
                     return;
                 }
                 $r = $this->login->login($body);

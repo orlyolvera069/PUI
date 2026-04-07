@@ -3,6 +3,7 @@
 namespace App\Pui\Repository;
 
 use App\Pui\Http\PuiLogger;
+use App\Pui\Validation\ManualValidators;
 use Core\Database;
 
 class PuiCoincidenciaOracleRepository
@@ -25,6 +26,8 @@ class PuiCoincidenciaOracleRepository
             }
         }
 
+        $curpCol = $this->resolverCurpParaInsert($linea, $payload);
+
         $sql = <<<SQL
             INSERT INTO PUI_COINCIDENCIAS (
                 ID_REPORTE,
@@ -34,7 +37,8 @@ class PuiCoincidenciaOracleRepository
                 HTTP_STATUS,
                 REQUEST_ID,
                 ENDPOINT,
-                FECHA_EVENTO
+                FECHA_EVENTO,
+                CURP
             ) VALUES (
                 :id_reporte,
                 :fase_busqueda,
@@ -43,7 +47,8 @@ class PuiCoincidenciaOracleRepository
                 :http_status,
                 :request_id,
                 :endpoint,
-                SYSTIMESTAMP
+                SYSTIMESTAMP,
+                :curp
             )
         SQL;
 
@@ -71,7 +76,7 @@ class PuiCoincidenciaOracleRepository
             $httpStatus = (int) $linea['http_status'];
         }
 
-        $ok = $db->insert($sql, [
+        $params = [
             'id_reporte' => (string) ($linea['reporte_id'] ?? $linea['id_reporte'] ?? ''),
             'fase_busqueda' => $faseBusqueda,
             'tipo_evento' => $tipoEvento,
@@ -79,10 +84,66 @@ class PuiCoincidenciaOracleRepository
             'http_status' => $httpStatus,
             'request_id' => isset($linea['requestId']) ? (string) $linea['requestId'] : null,
             'endpoint' => isset($linea['endpoint']) ? (string) $linea['endpoint'] : null,
+            'curp' => $curpCol,
+        ];
+
+        $rid = PuiLogger::requestContextId();
+        PuiLogger::info($rid, 'coincidencia_insert_db', [
+            'reporte_id' => $params['id_reporte'],
+            'fase_busqueda' => $faseBusqueda,
+            'endpoint' => $params['endpoint'],
+            'http_status' => $httpStatus,
         ]);
+
+        $ok = $db->insert($sql, $params);
         if (!$ok) {
             throw new \RuntimeException('No se pudo registrar coincidencia en Oracle.');
         }
+    }
+
+    /**
+     * Coincidencias §7.2 persistidas (mismo criterio que incremento de NUM_COINCIDENCIAS).
+     */
+    public function contarNotificacionesPorReporte(string $idReporte): int
+    {
+        $db = new Database();
+        if ($db->db_activa === null) {
+            return 0;
+        }
+        if ($idReporte === '') {
+            return 0;
+        }
+        $sql = <<<'SQL'
+            SELECT COUNT(1) AS CNT
+            FROM PUI_COINCIDENCIAS
+            WHERE ID_REPORTE = :id_reporte
+              AND ENDPOINT = 'notificar-coincidencia'
+              AND HTTP_STATUS >= 200
+              AND HTTP_STATUS < 300
+        SQL;
+        $row = $db->queryOne($sql, ['id_reporte' => $idReporte]);
+
+        return (int) (($row['CNT'] ?? $row['cnt'] ?? 0));
+    }
+
+    /**
+     * CURP en columna dedicada; si falta, intenta JSON §7.2.
+     */
+    private function resolverCurpParaInsert(array $linea, string $payloadJson): ?string
+    {
+        $raw = trim((string) ($linea['curp'] ?? ''));
+        if ($raw !== '') {
+            $n = ManualValidators::normalizeCurp($raw);
+
+            return $n !== '' ? $n : null;
+        }
+        $decoded = json_decode($payloadJson, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+        $n = ManualValidators::normalizeCurp((string) ($decoded['curp'] ?? ''));
+
+        return $n !== '' ? $n : null;
     }
 
     public function existeCoincidenciaFasePorCurp(string $idReporte, string $faseBusqueda, string $curp): bool

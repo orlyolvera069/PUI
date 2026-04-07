@@ -192,7 +192,33 @@ class PuiManualPayloadValidator
     }
 
     /**
-     * §7.3 — Cuerpo JSON con id e institucion_id siempre como cadenas.
+     * §7.2 — fase_busqueda e institucion_id como cadenas en JSON (evita enteros por INI u orígenes externos).
+     *
+     * @param array<string,mixed> $p
+     * @return array<string,mixed>
+     */
+    public static function normalizarNotificarCoincidencia(array $p): array
+    {
+        $out = $p;
+        // id: solo cadena JSON; no trim (paridad con id almacenado en la PUI/simulador, §7.2).
+        if (array_key_exists('id', $out)) {
+            $out['id'] = (string) $out['id'];
+        }
+        if (array_key_exists('curp', $out)) {
+            $out['curp'] = ManualValidators::normalizeCurp((string) $out['curp']);
+        }
+        if (array_key_exists('fase_busqueda', $out)) {
+            $out['fase_busqueda'] = trim((string) $out['fase_busqueda']);
+        }
+        if (array_key_exists('institucion_id', $out)) {
+            $out['institucion_id'] = strtoupper(trim((string) $out['institucion_id']));
+        }
+
+        return $out;
+    }
+
+    /**
+     * §7.3 — Cuerpo JSON con id e institucion_id siempre como cadenas (sin curp).
      * INI_SCANNER_TYPED puede cargar un RFC solo numérico como int; json_encode lo emitiría sin comillas y la PUI rechaza el cuerpo.
      *
      * @param array<string,mixed> $p
@@ -201,7 +227,7 @@ class PuiManualPayloadValidator
     public static function normalizarBusquedaFinalizada(array $p): array
     {
         return [
-            'id' => trim((string) ($p['id'] ?? '')),
+            'id' => (string) ($p['id'] ?? ''),
             'institucion_id' => strtoupper(trim((string) ($p['institucion_id'] ?? ''))),
         ];
     }

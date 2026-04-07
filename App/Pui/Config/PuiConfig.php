@@ -61,6 +61,8 @@ class PuiConfig
         'PUI_LOG_PREFIX',
         'PUI_E2E_ENABLE',
         'PUI_DEBUG_CONFIG',
+        'PUI_DB_SESSION_DEBUG',
+        'PUI_SQL_DEBUG',
         'PUI_ENABLE_AUX_PERSONA',
         'PUI_ENABLE_AUX_BUSQUEDA',
         'PUI_STRICT_REAL_MODE',

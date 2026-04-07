@@ -4,4 +4,10 @@
 *.log
 /.env
 /App/storage/pui/rate_limit.json
+/App/storage/pui/*.lock
+
+# No versionar simulador local ni manuales (distribución aparte)
+/Simulador/
+/Manual tecnico PUI.pdf
+/Manual tecnico de la solucion tecnologica para inst diversas.pdf
 
