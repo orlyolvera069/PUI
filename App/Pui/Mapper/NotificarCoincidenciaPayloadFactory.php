@@ -52,8 +52,9 @@ class NotificarCoincidenciaPayloadFactory
             'curp' => $curp,
             'lugar_nacimiento' => $lugar,
             'id' => $idBusqueda,
-            'institucion_id' => strtoupper($institucionId),
-            'fase_busqueda' => $faseBusqueda,
+            'institucion_id' => strtoupper((string) $institucionId),
+            // §7.2: cadena "1"|"2"|"3" en JSON (evita entero sin comillas que rompe validadores estrictos).
+            'fase_busqueda' => $fase,
         ];
 
         if ($includeEventFields) {
@@ -99,7 +100,7 @@ class NotificarCoincidenciaPayloadFactory
         return [
             'direccion' => self::limitLen($direccionPlano !== '' ? $direccionPlano : $calle, 500),
             'calle' => self::limitLen($calle, 50),
-            'numero' => self::limitLen($numSan, 50),
+            'numero' => self::limitLen($numSan, 20),
             'colonia' => self::limitLen($colonia, 50),
             'codigo_postal' => preg_match('/^\d{0,5}$/', $cp) ? $cp : '',
             'municipio_o_alcaldia' => self::limitLen($municipio, 100),

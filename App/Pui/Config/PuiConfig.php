@@ -77,6 +77,7 @@ class PuiConfig
         'PUI_OUTBOUND_PING_TIMEOUT_MS',
         'PUI_PADRON_SCHEMA',
         'PUI_FASE3_DAEMON_SLEEP_SECONDS',
+        'PUI_SIMULADOR_SYNC_DELAY_US',
     ];
 
     /** @var array<string,mixed>|null */

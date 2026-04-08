@@ -303,7 +303,11 @@ class PuiOutboundBearerResolver
         $path = (string) PuiConfig::get('PUI_OUTBOUND_LOGIN_PATH', '/login');
         $path = $path !== '' && $path[0] === '/' ? $path : '/' . $path;
         $url = $base . $path;
-        $json = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $loginFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $loginFlags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+        $json = json_encode($body, $loginFlags);
         if ($json === false) {
             throw new \RuntimeException('login: JSON inválido.');
         }

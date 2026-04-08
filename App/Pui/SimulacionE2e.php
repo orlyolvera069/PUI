@@ -74,6 +74,10 @@ class SimulacionE2e
             return $pasos;
         }
 
+        if (isset($ar['deferred']) && is_array($ar['deferred'])) {
+            $reporte->runPostActivacionFases1y2($ar['deferred']);
+        }
+
         $des = $reporte->desactivarReporte($requestId, [
             'id' => $reporteId,
         ]);

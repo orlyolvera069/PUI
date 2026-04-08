@@ -65,14 +65,23 @@ class ManualValidators
      */
     public static function lugarNacimientoValor(string $valor): bool
     {
-        $v = strtoupper(trim($valor));
+        $v = trim($valor);
         if ($v === '') {
             return false;
         }
-        if (strlen($v) > 20) {
+        $len = function_exists('mb_strlen') ? mb_strlen($v, 'UTF-8') : strlen($v);
+        if ($len > 20) {
             return false;
         }
-        return PuiAnexo5LugarNacimiento::esValorPermitido($v);
+        if (PuiAnexo5LugarNacimiento::esValorPermitido($v)) {
+            return true;
+        }
+        // strtoupper() no es seguro en UTF-8 (Anexo 5: MÉXICO, MICHOACÁN, …).
+        if (function_exists('mb_strtoupper')) {
+            return PuiAnexo5LugarNacimiento::esValorPermitido(mb_strtoupper($v, 'UTF-8'));
+        }
+
+        return PuiAnexo5LugarNacimiento::esValorPermitido(strtoupper($v));
     }
 
     /** §8.1 — usuario fijo "PUI" */

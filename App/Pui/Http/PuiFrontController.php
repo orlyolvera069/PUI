@@ -144,6 +144,10 @@ class PuiFrontController
                     return;
                 }
                 $r = $this->reportes->activarReporte($requestId, $body, false);
+                if (($r['status'] ?? 0) === 200 && isset($r['deferred']) && is_array($r['deferred'])) {
+                    $this->sendActivarReporteSuccessThenDeferred($requestId, $r['body'], $r['deferred']);
+                    return;
+                }
                 $this->sendRaw($r['status'], $r['body']);
                 return;
             }
@@ -161,6 +165,10 @@ class PuiFrontController
                     return;
                 }
                 $r = $this->reportes->activarReporte($requestId, $body, true);
+                if (($r['status'] ?? 0) === 200 && isset($r['deferred']) && is_array($r['deferred'])) {
+                    $this->sendActivarReporteSuccessThenDeferred($requestId, $r['body'], $r['deferred']);
+                    return;
+                }
                 $this->sendRaw($r['status'], $r['body']);
                 return;
             }
@@ -335,6 +343,84 @@ class PuiFrontController
         }
 
         return true;
+    }
+
+    /**
+     * §8.2 primero: el cuerpo 200 debe llegar al cliente (simulador) antes de cualquier POST saliente §7.2.
+     * Sin Content-Length + vaciado agresivo, mod_php/Apache puede retener el buffer hasta cerrar el script y el
+     * fetch de activar-reporte no resuelve mientras ya se enviaron notificar-coincidencia al mismo host.
+     *
+     * @param array<string,mixed> $body
+     * @param array<string,mixed> $deferred
+     */
+    private function sendActivarReporteSuccessThenDeferred(string $requestId, array $body, array $deferred): void
+    {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        @ini_set('zlib.output_compression', '0');
+        @ini_set('implicit_flush', '1');
+        ignore_user_abort(true);
+
+        $json = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $len = strlen($json);
+
+        if (!headers_sent()) {
+            http_response_code(200);
+            header('Content-Type: application/json; charset=UTF-8', true);
+            header('Content-Length: ' . $len, true);
+            header('Connection: close', true);
+        }
+
+        echo $json;
+
+        $this->flushAllOutputBuffersToClient();
+
+        PuiLogger::info($requestId, 'activar_reporte_respuesta_enviada', [
+            'id' => (string) ($deferred['id'] ?? ''),
+            'es_prueba' => (bool) ($deferred['esPrueba'] ?? false),
+            'bytes' => $len,
+        ]);
+
+        if (function_exists('fastcgi_finish_request')) {
+            @fastcgi_finish_request();
+        } elseif (function_exists('litespeed_finish_request')) {
+            @litespeed_finish_request();
+        }
+
+        for ($i = 0; $i < 4; $i++) {
+            if (function_exists('ob_flush')) {
+                @ob_flush();
+            }
+            @flush();
+        }
+
+        PuiLogger::info($requestId, 'fase_ejecucion_post_response', [
+            'id_reporte' => (string) ($deferred['id'] ?? ''),
+        ]);
+
+        try {
+            $this->reportes->runPostActivacionFases1y2($deferred);
+        } catch (\Throwable $e) {
+            PuiLogger::error($requestId, 'activar_post_fases_excepcion', [
+                'class' => get_class($e),
+                'msg' => $e->getMessage(),
+            ]);
+        }
+        exit;
+    }
+
+    /** Vacía buffers de salida para que el cliente reciba el 200 antes del trabajo posterior en el mismo proceso. */
+    private function flushAllOutputBuffersToClient(): void
+    {
+        $max = 16;
+        for ($n = 0; $n < $max && ob_get_level() > 0; $n++) {
+            ob_end_flush();
+        }
+        if (function_exists('ob_flush')) {
+            @ob_flush();
+        }
+        @flush();
     }
 
     /** @param array<string,mixed> $body */

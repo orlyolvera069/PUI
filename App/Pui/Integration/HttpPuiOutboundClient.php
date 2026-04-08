@@ -189,7 +189,7 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
      */
     private function doPost(string $url, array $headers, array $payload): array
     {
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $json = self::jsonEncodeSaliente($payload);
         if ($json === false) {
             return ['http_status' => 500, 'body' => null, 'raw' => 'encode_error'];
         }
@@ -239,5 +239,21 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
         $rawStr = is_string($raw) ? $raw : '';
         $body = json_decode($rawStr, true);
         return ['http_status' => $code, 'body' => $body, 'raw' => $rawStr];
+    }
+
+    /**
+     * §7.2–7.3 — JSON hacia la PUI/simulador: UTF-8 real + sustitución de bytes inválidos (Oracle/padrón).
+     * Sin esto json_encode() puede devolver false y nunca se envía el POST (coincidencias en simulador = 0).
+     *
+     * @return string|false
+     */
+    private static function jsonEncodeSaliente(array $payload)
+    {
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+
+        return json_encode($payload, $flags);
     }
 }

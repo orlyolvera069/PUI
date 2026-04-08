@@ -60,7 +60,10 @@ class PuiReporteService
     /**
      * §8.2 / §8.3 — Activar reporte (y prueba). Respuesta 200: solo { "message": "..." } (manual).
      *
-     * @return array{status:int, body:array<string,mixed>}
+     * En éxito, `deferred` permite al HTTP front enviar el 200 primero y ejecutar §7.2 después
+     * (el simulador persiste el reporte al recibir ese 200; no debe llegar notificar-coincidencia antes).
+     *
+     * @return array{status:int, body:array<string,mixed>, deferred?:array<string,mixed>}
      */
     public function activarReporte(string $requestId, array $body, bool $esPrueba): array
     {
@@ -128,7 +131,7 @@ class PuiReporteService
 
     /**
      * @param array<string,mixed> $body
-     * @return array{status:int, body:array<string,mixed>}
+     * @return array{status:int, body:array<string,mixed>, deferred?:array<string,mixed>}
      */
     private function ejecutarPipelineActivacion(string $requestId, array $body, bool $esPrueba, string $id): array
     {
@@ -158,17 +161,7 @@ class PuiReporteService
             'activo' => 1,
         ]);
 
-        try {
-            $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
-        } catch (\Throwable $e) {
-            if (!$this->shouldSwallowOrchestratorFailure($e)) {
-                throw $e;
-            }
-            PuiLogger::warning($requestId, 'activar_orquestador_continua_tras_fallo_saliente', [
-                'class' => get_class($e),
-                'msg' => $e->getMessage(),
-            ]);
-        }
+        // §7.2–7.3: el front HTTP debe enviar el 200 §8.2 y liberar al cliente antes de ejecutar fases (ver PuiFrontController).
 
         try {
             $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
@@ -193,7 +186,60 @@ class PuiReporteService
             'body' => [
                 'message' => 'La solicitud de activación del reporte de búsqueda se recibió correctamente.',
             ],
+            'deferred' => [
+                'requestId' => $requestId,
+                'body' => $body,
+                'id' => $id,
+                'esPrueba' => $esPrueba,
+                'institucionId' => $institucionId,
+            ],
         ];
+    }
+
+    /**
+     * §7.2 fases 1–2 solo después de que el simulador haya recibido el 200 de activar-reporte y haya guardado el id.
+     *
+     * @param array{requestId:string, body:array<string,mixed>, id:string, esPrueba:bool, institucionId:string} $deferred
+     */
+    public function runPostActivacionFases1y2(array $deferred): void
+    {
+        $requestId = (string) ($deferred['requestId'] ?? '');
+        $body = $deferred['body'] ?? [];
+        $id = (string) ($deferred['id'] ?? '');
+        $esPrueba = (bool) ($deferred['esPrueba'] ?? false);
+        $institucionId = (string) ($deferred['institucionId'] ?? '');
+        if ($requestId === '' || $id === '' || !is_array($body)) {
+            return;
+        }
+
+        PuiLogger::setRequestContext($requestId);
+
+        $delayUs = (int) PuiConfig::get('PUI_SIMULADOR_SYNC_DELAY_US', 300000);
+        if ($delayUs > 0) {
+            usleep($delayUs);
+            PuiLogger::info($requestId, 'simulador_sync_delay_aplicado', [
+                'microseconds' => $delayUs,
+                'id_reporte' => $id,
+            ]);
+        }
+
+        try {
+            $this->orchestrator->ejecutarFases1y2($requestId, $body, $id, $esPrueba, $institucionId);
+        } catch (\Throwable $e) {
+            if (!$this->shouldSwallowOrchestratorFailure($e)) {
+                PuiLogger::error($requestId, 'orquestador_post_respuesta_activar', [
+                    'class' => get_class($e),
+                    'msg' => $e->getMessage(),
+                    'nota' => 'La respuesta §8.2 ya fue enviada; revise salientes PUI y configuración.',
+                ]);
+
+                return;
+            }
+            PuiLogger::warning($requestId, 'activar_orquestador_continua_tras_fallo_saliente', [
+                'class' => get_class($e),
+                'msg' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

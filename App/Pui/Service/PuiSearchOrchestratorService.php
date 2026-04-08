@@ -445,7 +445,17 @@ class PuiSearchOrchestratorService
             return false;
         }
 
-        $r = $outbound->notificarCoincidencia($payload);
+        try {
+            $r = $outbound->notificarCoincidencia($payload);
+        } catch (\Throwable $e) {
+            PuiLogger::warning($requestId, 'outbound_notificar_coincidencia_excepcion', [
+                'reporte_id' => $reporteId,
+                'class' => get_class($e),
+                'msg' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
         $code = (int) ($r['http_status'] ?? 0);
         $abort = PuiConfig::get('PUI_ABORT_ON_NOTIFY_FAIL', '0');
         $abortOn = $abort === '1' || $abort === 1 || $abort === true;
