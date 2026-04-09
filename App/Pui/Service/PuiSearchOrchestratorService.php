@@ -328,23 +328,37 @@ class PuiSearchOrchestratorService
         $ultimaEj = trim((string) ($reporte['ULTIMA_EJECUCION_FASE3'] ?? $reporte['ultima_ejecucion_fase3'] ?? ''));
         $finF2 = trim((string) ($reporte['FECHA_FIN_FASE2'] ?? $reporte['fecha_fin_fase2'] ?? ''));
         $watermarkIso = null;
-        $watermarkInclusive = false;
+        // Inclusivo: FECHA_EVENTO >= marca. Con ULTIMA_EJECUCION_FASE3 además TRUNC(marca) para no excluir
+        // EVENTO insertado solo como DATE (00:00:00) el mismo día que la marca a las HH:MM:SS.
+        $watermarkInclusive = true;
+        $watermarkTruncarInicioDia = false;
         if ($ultimaEj !== '') {
             $watermarkIso = $ultimaEj;
-            $watermarkInclusive = false;
+            $watermarkTruncarInicioDia = true;
         } elseif ($finF2 !== '') {
             $watermarkIso = $finF2;
-            $watermarkInclusive = true;
         }
 
         $outbound = PuiOutboundFactory::create($esPrueba);
-        $coincidenciasNotificadas = 0;
-        foreach ($this->cl->buscarFase3Continua(
+        $rowsFase3 = $this->cl->buscarFase3Continua(
             $curpReporte,
             30,
             $watermarkIso,
-            $watermarkInclusive
-        ) as $row) {
+            $watermarkInclusive,
+            $watermarkTruncarInicioDia
+        );
+        $filasConsultadas = \count($rowsFase3);
+        $notificacionesExitosas = 0;
+        $omitidosDedupe = 0;
+
+        PuiLogger::info($requestId, 'fase3_consulta_eventos', [
+            'id_reporte' => $idReporte,
+            'filas' => $filasConsultadas,
+            'watermark_iso' => $watermarkIso,
+            'watermark_trunc_inicio_dia' => $watermarkTruncarInicioDia,
+        ]);
+
+        foreach ($rowsFase3 as $row) {
             if (!$this->reportesActivos->estaActivo($idReporte)) {
                 $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte);
                 return;
@@ -353,6 +367,7 @@ class PuiSearchOrchestratorService
             $eventoRowid = strtoupper(trim((string) ($row['EVENTO_ROWID'] ?? $row['evento_rowid'] ?? '')));
             if ($eventoRowid !== '') {
                 if ($this->coincidencias->existeNotificacionFase3PorEventoRowid($idReporte, $eventoRowid)) {
+                    $omitidosDedupe++;
                     PuiLogger::info($requestId, 'fase3_omitido_evento_ya_notificado', [
                         'id_reporte' => $idReporte,
                         'evento_rowid' => $eventoRowid,
@@ -360,6 +375,11 @@ class PuiSearchOrchestratorService
                     continue;
                 }
             } elseif ($curpRow !== '' && $this->coincidencias->existeCoincidenciaFasePorCurp($idReporte, '3', $curpRow)) {
+                $omitidosDedupe++;
+                PuiLogger::info($requestId, 'fase3_omitido_curp_ya_coincidencia_fase3', [
+                    'id_reporte' => $idReporte,
+                    'curp' => $curpRow,
+                ]);
                 continue;
             }
             $tipoEv = trim((string) ($row['TIPO_EVENTO'] ?? ''));
@@ -375,22 +395,31 @@ class PuiSearchOrchestratorService
                 true,
                 $fechaFinal
             );
-            $this->enviarNotificacionValidada(
+            if ($this->enviarNotificacionValidada(
                 $requestId,
                 $idReporte,
                 $institucionId,
                 $outbound,
                 $payload,
                 $eventoRowid !== '' ? $eventoRowid : null
-            );
-            $coincidenciasNotificadas++;
+            )) {
+                $notificacionesExitosas++;
+            }
         }
 
-        // Auditoría interna: dejar evidencia de ejecución de fase 3 sin resultados.
-        if ($coincidenciasNotificadas === 0) {
+        PuiLogger::info($requestId, 'fase3_scan_resumen', [
+            'id_reporte' => $idReporte,
+            'filas_consulta' => $filasConsultadas,
+            'notificaciones_2xx' => $notificacionesExitosas,
+            'omitidos_dedupe' => $omitidosDedupe,
+        ]);
+
+        // Auditoría: solo cuando la consulta incremental no devolvió ningún EVENTO (no confundir con dedupe u outbound fallido).
+        if ($filasConsultadas === 0) {
             $payloadScan = [
                 'id_reporte' => $idReporte,
                 'timestamp' => gmdate('c'),
+                'filas_en_consulta' => 0,
                 'criterio' => [
                     'curp' => $curpReporte,
                 ],
@@ -412,7 +441,10 @@ class PuiSearchOrchestratorService
             ]);
         }
 
-        $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte);
+        // No adelantar watermark si no hubo filas en la consulta (evita “saltar” eventos sin evaluarlos).
+        if ($filasConsultadas > 0) {
+            $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte);
+        }
 
         $nombre = trim((string) ($reporte['CRITERIO_NOMBRE'] ?? $reporte['criterio_nombre'] ?? ''));
         $pa = trim((string) ($reporte['PRIMER_APELLIDO'] ?? $reporte['primer_apellido'] ?? ''));

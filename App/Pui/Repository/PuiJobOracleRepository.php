@@ -384,6 +384,9 @@ class PuiJobOracleRepository
             return false;
         }
 
+        $rid = $requestId ?? $this->anonymousRequestId();
+        $pdo = $db->db_activa;
+
         $sql = <<<SQL
             UPDATE PUI_JOBS
             SET STATUS = 'RUNNING',
@@ -393,7 +396,46 @@ class PuiJobOracleRepository
             WHERE ID = :id
               AND STATUS IN ('PENDING','RETRY')
         SQL;
-        return $this->tryInsert($db, $sql, ['id' => $id, 'worker' => $worker], 'tomarJob', $requestId, null);
+
+        $stmt = null;
+        try {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(['id' => $id, 'worker' => $worker]);
+            $err = $stmt->errorInfo();
+            $sqlState = $err[0] ?? null;
+            if (!self::isPdoSqlStateSuccess($sqlState)) {
+                $pe = new \PDOException((string) ($err[2] ?? 'Error en sentencia SQL'), is_numeric($err[1] ?? null) ? (int) $err[1] : 0);
+                $this->logOracleFailure($rid, 'tomarJob', $pe, $sql, ['id' => $id, 'worker' => $worker], null, null, $stmt);
+
+                return false;
+            }
+            $n = $stmt->rowCount();
+            if ($n > 0) {
+                return true;
+            }
+        } catch (\PDOException $e) {
+            $this->logOracleFailure($rid, 'tomarJob', $e, $sql, ['id' => $id, 'worker' => $worker], null, null, $stmt);
+
+            return false;
+        }
+
+        // OCI/PDO a veces devuelve 0 o -1 aunque el UPDATE aplicó; verificar estado real.
+        $rows = $this->executeQueryAll(
+            $db,
+            'SELECT STATUS, LOCKED_BY FROM PUI_JOBS WHERE ID = :id',
+            ['id' => $id],
+            'tomarJob_verificar_estado',
+            $rid,
+            null
+        );
+        $r = $rows[0] ?? null;
+        if ($r === null) {
+            return false;
+        }
+        $st = strtoupper(trim((string) ($r['STATUS'] ?? $r['status'] ?? '')));
+        $lb = trim((string) ($r['LOCKED_BY'] ?? $r['locked_by'] ?? ''));
+
+        return $st === 'RUNNING' && $lb === $worker;
     }
 
     /**

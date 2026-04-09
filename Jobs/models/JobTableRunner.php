@@ -3,6 +3,7 @@
 namespace Jobs\models;
 
 use App\Pui\Config\PuiConfig;
+use App\Pui\Http\PuiLogger;
 use App\Pui\Repository\PuiJobOracleRepository;
 use App\Pui\Repository\PuiReporteActivoOracleRepository;
 use App\Pui\Integration\PuiOutboundFactory;
@@ -21,16 +22,53 @@ class JobTableRunner
 
         $procesados = 0;
         $errores = 0;
+        try {
+            $runRid = 'job-runner-' . bin2hex(random_bytes(6));
+        } catch (\Throwable $e) {
+            $runRid = 'job-runner-' . uniqid('', true);
+        }
         $jobs = $jobsRepo->obtenerJobsPendientes($limit);
+        $resumenCandidatos = [];
+        foreach ($jobs as $j) {
+            $resumenCandidatos[] = [
+                'id' => (int) ($j['ID'] ?? 0),
+                'job_type' => (string) ($j['JOB_TYPE'] ?? ''),
+                'id_reporte' => (string) ($j['ID_REPORTE'] ?? ''),
+                'status' => (string) ($j['STATUS'] ?? ''),
+                'run_at' => (string) ($j['RUN_AT'] ?? ''),
+            ];
+        }
+        PuiLogger::info($runRid, 'job_table_runner_tick', [
+            'worker' => $workerId,
+            'limite' => $limit,
+            'candidatos' => $resumenCandidatos,
+            'n_candidatos' => \count($jobs),
+        ]);
+
         foreach ($jobs as $job) {
             $id = (int) ($job['ID'] ?? 0);
             if ($id <= 0) {
                 continue;
             }
             $rescheduleSec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
-            if (!$jobsRepo->tomarJob($id, $workerId)) {
+            if (!$jobsRepo->tomarJob($id, $workerId, $runRid)) {
+                PuiLogger::warning($runRid, 'job_tomar_fallido', [
+                    'job_id' => $id,
+                    'worker' => $workerId,
+                    'job_type' => (string) ($job['JOB_TYPE'] ?? ''),
+                    'id_reporte' => (string) ($job['ID_REPORTE'] ?? ''),
+                    'run_at' => (string) ($job['RUN_AT'] ?? ''),
+                    'nota' => 'Otro worker tomó el job, el estado ya no era PENDING/RETRY, o fallo de BD.',
+                ]);
                 continue;
             }
+
+            PuiLogger::info($runRid, 'job_tomado', [
+                'job_id' => $id,
+                'worker' => $workerId,
+                'job_type' => (string) ($job['JOB_TYPE'] ?? ''),
+                'id_reporte' => (string) ($job['ID_REPORTE'] ?? ''),
+            ]);
 
             try {
                 $payloadRaw = (string) ($job['PAYLOAD_JSON'] ?? '{}');

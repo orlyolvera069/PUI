@@ -237,6 +237,10 @@ class CultivaClienteRepository
      * Fase 3: EVENTO ⨝ CLIENTE (LEFT JOIN); filtro por CURP en EVENTO; incremental por FECHA_EVENTO.
      *
      * @param string|null $watermarkIso Marca ISO (desde PUI_REPORTES_ACTIVOS); null = sin filtro incremental.
+     * @param bool $watermarkInclusive true = E.FECHA_EVENTO >= marca; false = estrictamente >.
+     * @param bool $watermarkTruncarInicioDia Si true (típico con ULTIMA_EJECUCION_FASE3), compara contra
+     *        TRUNC(marca): eventos del mismo día calendario con FECHA_EVENTO a medianoche (DATE sin hora)
+     *        no quedan excluidos frente a una marca a las 17:00 del mismo día.
      *
      * @return list<array<string,mixed>>
      */
@@ -244,7 +248,8 @@ class CultivaClienteRepository
         string $curp18,
         int $limite = 30,
         ?string $watermarkIso = null,
-        bool $watermarkInclusive = false
+        bool $watermarkInclusive = false,
+        bool $watermarkTruncarInicioDia = false
     ): array {
         $db = new Database();
         if ($db->db_activa === null) {
@@ -266,7 +271,11 @@ class CultivaClienteRepository
             $wm = substr(trim($watermarkIso), 0, 32);
             $wm19 = strlen($wm) >= 19 ? substr($wm, 0, 19) : $wm;
             $op = $watermarkInclusive ? '>=' : '>';
-            $where[] = 'E.FECHA_EVENTO ' . $op . " TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS')";
+            if ($watermarkTruncarInicioDia) {
+                $where[] = 'E.FECHA_EVENTO ' . $op . " TRUNC(TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS'))";
+            } else {
+                $where[] = 'E.FECHA_EVENTO ' . $op . " TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS')";
+            }
             $params['wm'] = $wm19;
         }
 
