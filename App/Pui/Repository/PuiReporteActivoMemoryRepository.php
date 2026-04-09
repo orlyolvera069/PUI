@@ -74,12 +74,15 @@ class PuiReporteActivoMemoryRepository
         self::$rows[$idReporte]['FECHA_FIN_FASE2'] = gmdate('Y-m-d\TH:i:s');
     }
 
-    public function actualizarUltimaEjecucionFase3(string $idReporte): void
+    public function actualizarUltimaEjecucionFase3(string $idReporte, ?string $marcaReferenciaIso = null): void
     {
         if (!isset(self::$rows[$idReporte])) {
             return;
         }
-        self::$rows[$idReporte]['ULTIMA_EJECUCION_FASE3'] = gmdate('Y-m-d\TH:i:s');
+        $m = $marcaReferenciaIso !== null ? trim($marcaReferenciaIso) : '';
+        self::$rows[$idReporte]['ULTIMA_EJECUCION_FASE3'] = $m !== ''
+            ? (strlen($m) >= 19 ? substr($m, 0, 19) : $m)
+            : gmdate('Y-m-d\TH:i:s');
     }
 
     public function incrementarNumCoincidencias(string $idReporte): void

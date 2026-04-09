@@ -171,19 +171,36 @@ class PuiReporteActivoOracleRepository
         }
     }
 
-    public function actualizarUltimaEjecucionFase3(string $idReporte): void
+    /**
+     * @param string|null $marcaReferenciaIso Si no es null, marca = máximo FECHA_EVENTO evaluado en el lote (evita
+     *        dejar la marca en SYSTIMESTAMP por delante de eventos del mismo día aún no vistos).
+     */
+    public function actualizarUltimaEjecucionFase3(string $idReporte, ?string $marcaReferenciaIso = null): void
     {
         $db = new Database();
         if ($db->db_activa === null) {
             PuiLogger::throwDatabaseUnavailable();
         }
 
-        $sql = <<<SQL
-            UPDATE PUI_REPORTES_ACTIVOS
-            SET ULTIMA_EJECUCION_FASE3 = SYSTIMESTAMP
-            WHERE ID_REPORTE = :id_reporte
-        SQL;
-        $ok = $db->insert($sql, ['id_reporte' => $idReporte]);
+        $m = $marcaReferenciaIso !== null ? trim($marcaReferenciaIso) : '';
+        if ($m !== '') {
+            $m = substr($m, 0, 32);
+            $m19 = strlen($m) >= 19 ? substr($m, 0, 19) : $m;
+            $sql = <<<SQL
+                UPDATE PUI_REPORTES_ACTIVOS
+                SET ULTIMA_EJECUCION_FASE3 = TO_TIMESTAMP(:marca, 'YYYY-MM-DD"T"HH24:MI:SS')
+                WHERE ID_REPORTE = :id_reporte
+            SQL;
+            $params = ['id_reporte' => $idReporte, 'marca' => $m19];
+        } else {
+            $sql = <<<SQL
+                UPDATE PUI_REPORTES_ACTIVOS
+                SET ULTIMA_EJECUCION_FASE3 = SYSTIMESTAMP
+                WHERE ID_REPORTE = :id_reporte
+            SQL;
+            $params = ['id_reporte' => $idReporte];
+        }
+        $ok = $db->insert($sql, $params);
         if (!$ok) {
             throw new \RuntimeException('No se pudo actualizar ULTIMA_EJECUCION_FASE3.');
         }

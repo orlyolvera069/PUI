@@ -237,10 +237,10 @@ class CultivaClienteRepository
      * Fase 3: EVENTO ⨝ CLIENTE (LEFT JOIN); filtro por CURP en EVENTO; incremental por FECHA_EVENTO.
      *
      * @param string|null $watermarkIso Marca ISO (desde PUI_REPORTES_ACTIVOS); null = sin filtro incremental.
-     * @param bool $watermarkInclusive true = E.FECHA_EVENTO >= marca; false = estrictamente >.
-     * @param bool $watermarkTruncarInicioDia Si true (típico con ULTIMA_EJECUCION_FASE3), compara contra
-     *        TRUNC(marca): eventos del mismo día calendario con FECHA_EVENTO a medianoche (DATE sin hora)
-     *        no quedan excluidos frente a una marca a las 17:00 del mismo día.
+     * @param bool $watermarkInclusive true = primera rama con >=; false = >.
+     * @param bool $watermarkUltimaEjecucionFase3 Si true (marca = ULTIMA_EJECUCION_FASE3): incluye eventos del mismo
+     *        día calendario con hora &lt; marca (p. ej. DATE a 00:00 o filas anteriores a SYSTIMESTAMP de un tick).
+     *        Si false (típico FECHA_FIN_FASE2): solo E.FECHA_EVENTO op TO_TIMESTAMP(marca).
      *
      * @return list<array<string,mixed>>
      */
@@ -249,7 +249,7 @@ class CultivaClienteRepository
         int $limite = 30,
         ?string $watermarkIso = null,
         bool $watermarkInclusive = false,
-        bool $watermarkTruncarInicioDia = false
+        bool $watermarkUltimaEjecucionFase3 = false
     ): array {
         $db = new Database();
         if ($db->db_activa === null) {
@@ -271,18 +271,26 @@ class CultivaClienteRepository
             $wm = substr(trim($watermarkIso), 0, 32);
             $wm19 = strlen($wm) >= 19 ? substr($wm, 0, 19) : $wm;
             $op = $watermarkInclusive ? '>=' : '>';
-            if ($watermarkTruncarInicioDia) {
-                $where[] = 'E.FECHA_EVENTO ' . $op . " TRUNC(TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS'))";
+            $fmt = 'YYYY-MM-DD"T"HH24:MI:SS';
+            if ($watermarkUltimaEjecucionFase3) {
+                $where[] = "(
+                    E.FECHA_EVENTO {$op} TO_TIMESTAMP(:wm, '{$fmt}')
+                    OR (
+                        TRUNC(E.FECHA_EVENTO) = TRUNC(TO_TIMESTAMP(:wm, '{$fmt}'))
+                        AND E.FECHA_EVENTO < TO_TIMESTAMP(:wm, '{$fmt}')
+                    )
+                )";
             } else {
-                $where[] = 'E.FECHA_EVENTO ' . $op . " TO_TIMESTAMP(:wm, 'YYYY-MM-DD\"T\"HH24:MI:SS')";
+                $where[] = "E.FECHA_EVENTO {$op} TO_TIMESTAMP(:wm, '{$fmt}')";
             }
             $params['wm'] = $wm19;
         }
 
         $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', ' . self::selectEventoProyeccion('E')
             . ', ROWIDTOCHAR(E.ROWID) AS EVENTO_ROWID'
+            . ", TO_CHAR(E.FECHA_EVENTO, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS FECHA_EVENTO_ISO"
             . " FROM {$from} WHERE " . implode(' AND ', $where)
-            . ' ORDER BY E.FECHA_EVENTO, E.ROWID';
+            . ' ORDER BY E.FECHA_EVENTO DESC, E.ROWID DESC';
 
         $sql = 'SELECT * FROM (' . $sql . ') t WHERE ROWNUM <= :limite';
 

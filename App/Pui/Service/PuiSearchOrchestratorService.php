@@ -303,6 +303,25 @@ class PuiSearchOrchestratorService
         }
     }
 
+    /**
+     * @param list<array<string,mixed>> $filas Filas de {@see CultivaClienteRepository::buscarFase3Continua}
+     */
+    private function maxFechaEventoIsoEnFilas(array $filas): ?string
+    {
+        $max = null;
+        foreach ($filas as $row) {
+            $fe = trim((string) ($row['FECHA_EVENTO_ISO'] ?? ''));
+            if ($fe === '') {
+                continue;
+            }
+            if ($max === null || strcmp($fe, $max) > 0) {
+                $max = $fe;
+            }
+        }
+
+        return $max;
+    }
+
     public function ejecutarFase3PorReporte(string $requestId, string $idReporte, bool $esPrueba): void
     {
         $reporte = $this->reportesActivos->obtener($idReporte);
@@ -328,13 +347,12 @@ class PuiSearchOrchestratorService
         $ultimaEj = trim((string) ($reporte['ULTIMA_EJECUCION_FASE3'] ?? $reporte['ultima_ejecucion_fase3'] ?? ''));
         $finF2 = trim((string) ($reporte['FECHA_FIN_FASE2'] ?? $reporte['fecha_fin_fase2'] ?? ''));
         $watermarkIso = null;
-        // Inclusivo: FECHA_EVENTO >= marca. Con ULTIMA_EJECUCION_FASE3 además TRUNC(marca) para no excluir
-        // EVENTO insertado solo como DATE (00:00:00) el mismo día que la marca a las HH:MM:SS.
+        // Inclusivo en la primera rama del predicado. ULTIMA_EJECUCION_FASE3 usa OR mismo día (ver CultivaClienteRepository).
         $watermarkInclusive = true;
-        $watermarkTruncarInicioDia = false;
+        $watermarkUltimaEjecucion = false;
         if ($ultimaEj !== '') {
             $watermarkIso = $ultimaEj;
-            $watermarkTruncarInicioDia = true;
+            $watermarkUltimaEjecucion = true;
         } elseif ($finF2 !== '') {
             $watermarkIso = $finF2;
         }
@@ -345,22 +363,26 @@ class PuiSearchOrchestratorService
             30,
             $watermarkIso,
             $watermarkInclusive,
-            $watermarkTruncarInicioDia
+            $watermarkUltimaEjecucion
         );
         $filasConsultadas = \count($rowsFase3);
         $notificacionesExitosas = 0;
         $omitidosDedupe = 0;
+        $maxFeIsoLote = $this->maxFechaEventoIsoEnFilas($rowsFase3);
 
         PuiLogger::info($requestId, 'fase3_consulta_eventos', [
             'id_reporte' => $idReporte,
             'filas' => $filasConsultadas,
             'watermark_iso' => $watermarkIso,
-            'watermark_trunc_inicio_dia' => $watermarkTruncarInicioDia,
+            'watermark_ultima_ejecucion_fase3' => $watermarkUltimaEjecucion,
+            'max_fecha_evento_lote' => $maxFeIsoLote,
         ]);
 
         foreach ($rowsFase3 as $row) {
             if (!$this->reportesActivos->estaActivo($idReporte)) {
-                $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte);
+                if ($maxFeIsoLote !== null) {
+                    $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte, $maxFeIsoLote);
+                }
                 return;
             }
             $curpRow = strtoupper(trim((string) ($row['CURP'] ?? '')));
@@ -441,9 +463,9 @@ class PuiSearchOrchestratorService
             ]);
         }
 
-        // No adelantar watermark si no hubo filas en la consulta (evita “saltar” eventos sin evaluarlos).
-        if ($filasConsultadas > 0) {
-            $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte);
+        // Marca = máximo FECHA_EVENTO del lote consultado (no SYSTIMESTAMP), para no quedar “por delante” de eventos del día.
+        if ($filasConsultadas > 0 && $maxFeIsoLote !== null) {
+            $this->reportesActivos->actualizarUltimaEjecucionFase3($idReporte, $maxFeIsoLote);
         }
 
         $nombre = trim((string) ($reporte['CRITERIO_NOMBRE'] ?? $reporte['criterio_nombre'] ?? ''));
