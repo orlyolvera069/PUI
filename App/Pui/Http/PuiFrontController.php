@@ -87,6 +87,10 @@ class PuiFrontController
             }
 
             if ($method === 'GET' && $path === '/salud') {
+                $kickOn = PuiConfig::get('PUI_FASE3_KICK_ON_SALUD', '1');
+                if (($kickOn === true || $kickOn === 1 || $kickOn === '1')) {
+                    PuiReporteService::ensureFase3RunnerDaemon();
+                }
                 $this->sendRaw(200, [
                     'meta' => [
                         'requestId' => $requestId,

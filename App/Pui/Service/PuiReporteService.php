@@ -164,17 +164,20 @@ class PuiReporteService
         // §7.2–7.3: el front HTTP debe enviar el 200 §8.2 y liberar al cliente antes de ejecutar fases (ver PuiFrontController).
 
         try {
-            $this->jobs->programarFase3($id, $esPrueba, 15, $requestId);
+            $f3Sec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
+            $f3MinCol = max(1, intdiv($f3Sec + 59, 60));
+            $this->jobs->programarFase3($id, $esPrueba, $f3MinCol, $requestId);
             PuiLogger::info($requestId, 'fase3_registrada', [
                 'id_reporte' => $id,
-                'intervalo_minutos' => 15,
+                'job_reschedule_seconds' => $f3Sec,
+                'interval_minutes_column' => $f3MinCol,
             ]);
         } catch (\Throwable $e) {
             // §7.3 ya se envió; el job fase 3 es complementario — no debe revertir la activación.
             PuiLogger::warning($requestId, 'programar_fase3_error', ['id' => $id, 'msg' => $e->getMessage()]);
         }
         try {
-            $this->kickFase3RunnerDaemon();
+            self::ensureFase3RunnerDaemon();
         } catch (\Throwable $e) {
             PuiLogger::warning($requestId, 'kick_fase3_daemon_error', ['msg' => $e->getMessage()]);
         }
@@ -415,13 +418,17 @@ class PuiReporteService
     }
 
     /**
-     * Inicia un runner daemon de fase 3 en segundo plano.
-     * La re-ejecución continúa mientras exista en PUI_JOBS y el reporte siga activo.
+     * Arranca el proceso PHP `JobTableRunner run-daemon` si no hay heartbeat reciente.
+     * Búsqueda continua (fase 3) periódica según manual; no requiere cron del SO.
      */
-    private function kickFase3RunnerDaemon(): void
+    public static function ensureFase3RunnerDaemon(): void
     {
         try {
-            $backendRoot = dirname(__DIR__, 3); // .../backend
+            if (PuiConfig::isSimulationMode()) {
+                return;
+            }
+
+            $backendRoot = dirname(__DIR__, 3);
             $runnerScript = $backendRoot . '/Jobs/controllers/JobTableRunner.php';
             $lockFile = $backendRoot . '/App/storage/pui/pui_fase3_runner.lock';
 
@@ -429,11 +436,13 @@ class PuiReporteService
                 return;
             }
 
-            $recentSeconds = 60;
+            $sleepSeconds = max(1, (int) PuiConfig::get('PUI_FASE3_DAEMON_SLEEP_SECONDS', 30));
+            $recentSeconds = max(60, 2 * $sleepSeconds);
+
             if (is_file($lockFile)) {
                 $age = time() - filemtime($lockFile);
                 if ($age >= 0 && $age < $recentSeconds) {
-                    return; // daemon ya está vivo (heartbeat reciente)
+                    return;
                 }
             }
 
@@ -442,21 +451,35 @@ class PuiReporteService
                 mkdir($dir, 0775, true);
             }
 
-            // Marcar como iniciado para evitar carreras entre activaciones simultáneas.
             @file_put_contents($lockFile, (string) time(), LOCK_EX);
 
             $php = PHP_BINARY;
-            $sleepSeconds = (int) PuiConfig::get('PUI_FASE3_DAEMON_SLEEP_SECONDS', 15);
+            $phpArg = escapeshellarg($php);
+            $scriptArg = escapeshellarg($runnerScript);
+            $sleepArg = escapeshellarg((string) $sleepSeconds);
+            $limitArg = escapeshellarg('20');
+            $lockArg = escapeshellarg($lockFile);
 
-            $cmd = 'cmd /c start "" /B ' . escapeshellarg($php)
-                . ' -f ' . escapeshellarg($runnerScript)
-                . ' run-daemon ' . escapeshellarg((string) $sleepSeconds)
-                . ' ' . escapeshellarg('20')
-                . ' ' . escapeshellarg($lockFile);
-
-            @pclose(@popen($cmd, 'r'));
+            if (DIRECTORY_SEPARATOR === '\\') {
+                $cmd = 'cmd /c start "" /B ' . $phpArg
+                    . ' -f ' . $scriptArg
+                    . ' run-daemon ' . $sleepArg
+                    . ' ' . $limitArg
+                    . ' ' . $lockArg;
+                @pclose(@popen($cmd, 'r'));
+            } else {
+                $logFile = $backendRoot . '/Jobs/Logs/JobTableRunner-daemon.log';
+                $logDir = dirname($logFile);
+                if (!is_dir($logDir)) {
+                    @mkdir($logDir, 0775, true);
+                }
+                $line = $phpArg . ' -f ' . $scriptArg
+                    . ' run-daemon ' . $sleepArg . ' ' . $limitArg . ' ' . $lockArg;
+                $redirect = ' >> ' . escapeshellarg($logFile) . ' 2>&1';
+                exec('nohup ' . $line . $redirect . ' &');
+            }
         } catch (\Throwable $e) {
-            // No bloquea el flujo principal; el runner puede ejecutarse por cron externo.
+            // No bloquea el flujo principal; el runner puede ejecutarse manualmente (CLI).
         }
     }
 

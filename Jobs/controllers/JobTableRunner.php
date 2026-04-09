@@ -64,7 +64,7 @@ class JobTableRunner extends Job
         echo "OK\n";
     }
 
-    public function runDaemon(int $sleepSeconds = 10, int $limit = 20, ?string $lockFile = null): void
+    public function runDaemon(int $sleepSeconds = 30, int $limit = 20, ?string $lockFile = null): void
     {
         $worker = php_uname('n') . ':' . getmypid();
         while (true) {
@@ -95,7 +95,7 @@ if (isset($argv[1])) {
             $runner->requeueFailed();
             break;
         case 'run-daemon':
-            $sleep = isset($argv[2]) ? (int) $argv[2] : 10;
+            $sleep = isset($argv[2]) ? (int) $argv[2] : 30;
             $lim = isset($argv[3]) ? (int) $argv[3] : 20;
             $lockFile = isset($argv[4]) ? (string) $argv[4] : null;
             $runner->runDaemon($sleep, $lim, $lockFile);
@@ -105,7 +105,7 @@ if (isset($argv[1])) {
             echo "run-once [limit]\n";
             echo "run-batch [iteraciones] [limit]\n";
             echo "requeue-failed\n";
-            echo "run-daemon [sleepSeconds] [limit]\n";
+            echo "run-daemon [sleepSeconds=30] [limit=20] [lockFile]\n";
             break;
         default:
             echo "Comando no reconocido. Usa 'help'.\n";

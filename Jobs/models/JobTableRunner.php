@@ -2,6 +2,7 @@
 
 namespace Jobs\models;
 
+use App\Pui\Config\PuiConfig;
 use App\Pui\Repository\PuiJobOracleRepository;
 use App\Pui\Repository\PuiReporteActivoOracleRepository;
 use App\Pui\Integration\PuiOutboundFactory;
@@ -26,7 +27,7 @@ class JobTableRunner
             if ($id <= 0) {
                 continue;
             }
-            $interval = max(1, (int) ($job['INTERVAL_MINUTES'] ?? 15));
+            $rescheduleSec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
             if (!$jobsRepo->tomarJob($id, $workerId)) {
                 continue;
             }
@@ -69,7 +70,7 @@ class JobTableRunner
                     $orchestrator->ejecutarFase3PorReporte($requestId, $idReporte, $esPrueba);
 
                     if ($reportesRepo->estaActivo($idReporte)) {
-                        $jobsRepo->marcarProcesado($id, $interval);
+                        $jobsRepo->marcarProcesado($id, $rescheduleSec);
                         $procesados++;
                     } else {
                         $jobsRepo->cancelarJob($id);
@@ -96,7 +97,7 @@ class JobTableRunner
                     $errores++;
                 }
             } finally {
-                $jobsRepo->liberarLock($id, $interval);
+                $jobsRepo->liberarLock($id, $rescheduleSec);
             }
         }
 

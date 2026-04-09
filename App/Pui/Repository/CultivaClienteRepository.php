@@ -271,6 +271,7 @@ class CultivaClienteRepository
         }
 
         $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', ' . self::selectEventoProyeccion('E')
+            . ', ROWIDTOCHAR(E.ROWID) AS EVENTO_ROWID'
             . " FROM {$from} WHERE " . implode(' AND ', $where)
             . ' ORDER BY E.FECHA_EVENTO, E.ROWID';
 

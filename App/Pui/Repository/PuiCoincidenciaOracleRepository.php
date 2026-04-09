@@ -28,6 +28,11 @@ class PuiCoincidenciaOracleRepository
 
         $curpCol = $this->resolverCurpParaInsert($linea, $payload);
 
+        $eventoRowid = null;
+        if (array_key_exists('evento_rowid', $linea) && $linea['evento_rowid'] !== null && trim((string) $linea['evento_rowid']) !== '') {
+            $eventoRowid = strtoupper(trim((string) $linea['evento_rowid']));
+        }
+
         $sql = <<<SQL
             INSERT INTO PUI_COINCIDENCIAS (
                 ID_REPORTE,
@@ -38,7 +43,8 @@ class PuiCoincidenciaOracleRepository
                 REQUEST_ID,
                 ENDPOINT,
                 FECHA_EVENTO,
-                CURP
+                CURP,
+                EVENTO_ROWID
             ) VALUES (
                 :id_reporte,
                 :fase_busqueda,
@@ -48,7 +54,8 @@ class PuiCoincidenciaOracleRepository
                 :request_id,
                 :endpoint,
                 SYSTIMESTAMP,
-                :curp
+                :curp,
+                :evento_rowid
             )
         SQL;
 
@@ -85,6 +92,7 @@ class PuiCoincidenciaOracleRepository
             'request_id' => isset($linea['requestId']) ? (string) $linea['requestId'] : null,
             'endpoint' => isset($linea['endpoint']) ? (string) $linea['endpoint'] : null,
             'curp' => $curpCol,
+            'evento_rowid' => $eventoRowid,
         ];
 
         $rid = PuiLogger::requestContextId();
@@ -159,7 +167,7 @@ class PuiCoincidenciaOracleRepository
         }
 
         // Dedupe por presencia de '"curp":"<curp>"' dentro del payload JSON almacenado.
-        // Esto evita reprocesar la misma coincidencia en búsqueda continua (fase 3).
+        // Fase 3: preferir {@see existeNotificacionFase3PorEventoRowid} (misma CURP en muchos EVENTO).
         $needle = '"curp":"' . $curp . '"';
 
         $sql = <<<SQL
@@ -176,7 +184,38 @@ class PuiCoincidenciaOracleRepository
             'needle' => $needle,
         ]);
 
-        $cnt = (int) (($row['CNT'] ?? 0));
+        $cnt = (int) (($row['CNT'] ?? $row['cnt'] ?? 0));
         return $cnt > 0;
+    }
+
+    /**
+     * Fase 3: una notificación por fila EVENTO (ROWID), no por CURP.
+     */
+    public function existeNotificacionFase3PorEventoRowid(string $idReporte, string $eventoRowid): bool
+    {
+        $db = new Database();
+        if ($db->db_activa === null) {
+            return false;
+        }
+        $rid = strtoupper(trim($eventoRowid));
+        if ($rid === '') {
+            return false;
+        }
+        $sql = <<<'SQL'
+            SELECT COUNT(1) AS CNT
+            FROM PUI_COINCIDENCIAS
+            WHERE ID_REPORTE = :id_reporte
+              AND FASE_BUSQUEDA = '3'
+              AND EVENTO_ROWID = :evento_rowid
+              AND ENDPOINT = 'notificar-coincidencia'
+              AND HTTP_STATUS >= 200
+              AND HTTP_STATUS < 300
+        SQL;
+        $row = $db->queryOne($sql, [
+            'id_reporte' => $idReporte,
+            'evento_rowid' => $rid,
+        ]);
+
+        return (int) (($row['CNT'] ?? $row['cnt'] ?? 0)) > 0;
     }
 }

@@ -295,6 +295,7 @@ class PuiJobOracleRepository
                 VALUES (S.JOB_TYPE, S.ID_REPORTE, 'PENDING', SYSTIMESTAMP, 0, 10, S.INTERVAL_MINUTES, S.PAYLOAD_JSON, SYSTIMESTAMP)
         SQL;
 
+        // INTERVAL_MINUTES en tabla: referencia aproximada (compat); el runner usa PUI_FASE3_JOB_INTERVAL_SECONDS.
         $this->executeInsert($db, $sql, [
             'job_type' => self::JOB_FASE3_SCAN,
             'id_reporte' => $idReporte,
@@ -395,19 +396,22 @@ class PuiJobOracleRepository
         return $this->tryInsert($db, $sql, ['id' => $id, 'worker' => $worker], 'tomarJob', $requestId, null);
     }
 
-    public function marcarProcesado(int $id, int $intervalMinutes = 15, ?string $requestId = null): void
+    /**
+     * @param int $intervalSeconds Segundos hasta la próxima ejecución elegible (RUN_AT). Alineado con PUI_FASE3_JOB_INTERVAL_SECONDS.
+     */
+    public function marcarProcesado(int $id, int $intervalSeconds = 30, ?string $requestId = null): void
     {
         $db = new Database();
         if ($db->db_activa === null) {
             PuiLogger::throwDatabaseUnavailable();
         }
 
-        $intervalMinutes = max(1, $intervalMinutes);
+        $intervalSeconds = max(1, $intervalSeconds);
 
         $sql = <<<SQL
             UPDATE PUI_JOBS
             SET STATUS = 'PENDING',
-                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_minutes, 'MINUTE'),
+                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_seconds, 'SECOND'),
                 ATTEMPTS = 0,
                 LOCKED_BY = NULL,
                 LOCKED_AT = NULL,
@@ -417,18 +421,21 @@ class PuiJobOracleRepository
         SQL;
         $this->executeInsert($db, $sql, [
             'id' => $id,
-            'interval_minutes' => $intervalMinutes,
+            'interval_seconds' => $intervalSeconds,
         ], 'marcarProcesado', $requestId, ['job_id' => $id], null);
     }
 
-    public function liberarLock(int $id, int $intervalMinutes = 15, ?string $requestId = null): void
+    /**
+     * @param int $intervalSeconds Segundos hasta RUN_AT al liberar lock (misma semántica que marcarProcesado).
+     */
+    public function liberarLock(int $id, int $intervalSeconds = 30, ?string $requestId = null): void
     {
         $db = new Database();
         if ($db->db_activa === null) {
             return;
         }
 
-        $intervalMinutes = max(1, $intervalMinutes);
+        $intervalSeconds = max(1, $intervalSeconds);
 
         $sql = <<<SQL
             UPDATE PUI_JOBS
@@ -436,14 +443,14 @@ class PuiJobOracleRepository
                 LOCKED_AT = NULL,
                 LOCKED_BY = NULL,
                 STATUS = 'PENDING',
-                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_minutes, 'MINUTE'),
+                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_seconds, 'SECOND'),
                 UPDATED_AT = SYSTIMESTAMP
             WHERE ID = :id
               AND STATUS = 'RUNNING'
         SQL;
         $this->tryInsert($db, $sql, [
             'id' => $id,
-            'interval_minutes' => $intervalMinutes,
+            'interval_seconds' => $intervalSeconds,
         ], 'liberarLock', $requestId, null);
     }
 

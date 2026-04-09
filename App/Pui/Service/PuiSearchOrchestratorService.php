@@ -350,8 +350,16 @@ class PuiSearchOrchestratorService
                 return;
             }
             $curpRow = strtoupper(trim((string) ($row['CURP'] ?? '')));
-            if ($curpRow !== '' && $this->coincidencias->existeCoincidenciaFasePorCurp($idReporte, '3', $curpRow)) {
-                // Evitar reprocesar la misma coincidencia en búsqueda continua.
+            $eventoRowid = strtoupper(trim((string) ($row['EVENTO_ROWID'] ?? $row['evento_rowid'] ?? '')));
+            if ($eventoRowid !== '') {
+                if ($this->coincidencias->existeNotificacionFase3PorEventoRowid($idReporte, $eventoRowid)) {
+                    PuiLogger::info($requestId, 'fase3_omitido_evento_ya_notificado', [
+                        'id_reporte' => $idReporte,
+                        'evento_rowid' => $eventoRowid,
+                    ]);
+                    continue;
+                }
+            } elseif ($curpRow !== '' && $this->coincidencias->existeCoincidenciaFasePorCurp($idReporte, '3', $curpRow)) {
                 continue;
             }
             $tipoEv = trim((string) ($row['TIPO_EVENTO'] ?? ''));
@@ -367,7 +375,14 @@ class PuiSearchOrchestratorService
                 true,
                 $fechaFinal
             );
-            $this->enviarNotificacionValidada($requestId, $idReporte, $institucionId, $outbound, $payload);
+            $this->enviarNotificacionValidada(
+                $requestId,
+                $idReporte,
+                $institucionId,
+                $outbound,
+                $payload,
+                $eventoRowid !== '' ? $eventoRowid : null
+            );
             $coincidenciasNotificadas++;
         }
 
@@ -432,7 +447,8 @@ class PuiSearchOrchestratorService
         string $reporteId,
         string $institucionId,
         PuiOutboundClientInterface $outbound,
-        array $payload
+        array $payload,
+        ?string $eventoRowid = null
     ): bool {
         $verr = PuiManualPayloadValidator::notificarCoincidencia($payload);
         if ($verr !== []) {
@@ -482,7 +498,8 @@ class PuiSearchOrchestratorService
                 $reporteId,
                 $institucionId,
                 $payload,
-                $r
+                $r,
+                $eventoRowid
             );
 
             return true;
@@ -509,7 +526,8 @@ class PuiSearchOrchestratorService
         string $reporteId,
         string $institucionId,
         array $payload,
-        array $respuestaSaliente
+        array $respuestaSaliente,
+        ?string $eventoRowid = null
     ): void {
         $curp = ManualValidators::normalizeCurp((string) ($payload['curp'] ?? ''));
         $linea = [
@@ -524,6 +542,10 @@ class PuiSearchOrchestratorService
             'payload_json' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'curp' => $curp,
         ];
+        $er = $eventoRowid !== null ? strtoupper(trim($eventoRowid)) : '';
+        if ($er !== '') {
+            $linea['evento_rowid'] = $er;
+        }
         try {
             $this->coincidencias->registrarCoincidencia($linea);
             $this->reportesActivos->incrementarNumCoincidencias($reporteId);
