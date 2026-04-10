@@ -305,8 +305,14 @@ class PuiManualPayloadValidator
         }
         if (!self::hasString($p, 'lugar_nacimiento') || trim($p['lugar_nacimiento']) === '') {
             $e[] = 'lugar_nacimiento obligatorio';
-        } elseif (!ManualValidators::lugarNacimientoValor($p['lugar_nacimiento'])) {
-            $e[] = 'lugar_nacimiento longitud inválida (máx. 20)';
+        } else {
+            $ln = trim((string) $p['lugar_nacimiento']);
+            $len = function_exists('mb_strlen') ? mb_strlen($ln, 'UTF-8') : strlen($ln);
+            if ($len > 20) {
+                $e[] = 'lugar_nacimiento longitud inválida (máx. 20)';
+            } elseif (!ManualValidators::lugarNacimientoValor($p['lugar_nacimiento'])) {
+                $e[] = 'lugar_nacimiento no reconocido (Anexo 5; p. ej. MÉXICO)';
+            }
         }
         if (!self::isOptionalStringFieldValid($p, 'fecha_nacimiento', static fn(string $v): bool => ManualValidators::fechaIso8601($v))) {
             $e[] = 'fecha_nacimiento formato YYYY-MM-DD';

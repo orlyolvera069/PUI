@@ -74,6 +74,38 @@ class PuiAnexo5LugarNacimiento
         if ($v === '') {
             return false;
         }
-        return in_array($v, self::MAPA, true);
+        if (in_array($v, self::MAPA, true)) {
+            return true;
+        }
+        $vn = self::normalizarSinDiacriticos($v);
+        foreach (self::MAPA as $canonical) {
+            if (self::normalizarSinDiacriticos($canonical) === $vn) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Compara equivalencias tipo MEXICO vs MÉXICO (simuladores/UI sin acentos vs Anexo 5).
+     */
+    private static function normalizarSinDiacriticos(string $s): string
+    {
+        $t = mb_strtoupper(trim($s), 'UTF-8');
+        if (class_exists(\Normalizer::class)) {
+            $d = \Normalizer::normalize($t, \Normalizer::FORM_D);
+            if ($d !== false && $d !== '') {
+                $stripped = preg_replace('/\p{Mn}/u', '', $d);
+                if ($stripped !== null && $stripped !== '') {
+                    return $stripped;
+                }
+            }
+        }
+
+        return strtr($t, [
+            'Á' => 'A', 'É' => 'E', 'Í' => 'I', 'Ó' => 'O', 'Ú' => 'U',
+            'Ü' => 'U', 'Ñ' => 'N',
+        ]);
     }
 }
