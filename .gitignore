@@ -4,6 +4,7 @@
 *.log
 /.env
 /App/storage/pui/rate_limit.json
+/App/storage/pui/outbound_ping_ok
 /App/storage/pui/*.lock
 
 # No versionar simulador local ni manuales (distribución aparte)

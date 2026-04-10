@@ -84,12 +84,17 @@ class PuiReporteService
             'es_prueba' => $esPrueba,
         ]);
 
+        // GET saliente previo (opcional): en ráfagas concurrentes desactivar con PUI_OUTBOUND_PING_ON_ACTIVAR_PRUEBA=0 en pui.ini.
         if ($esPrueba && !PuiConfig::isSimulationMode()) {
-            try {
-                (new HttpPuiOutboundClient())->verificarConectividadSaliente();
-            } catch (\RuntimeException $e) {
-                PuiLogger::warning($requestId, 'activar_prueba_ping_fail', ['msg' => $e->getMessage()]);
-                return $this->err($requestId, 502, 'PUI-EXT-502', 'No se pudo verificar conectividad con la PUI.');
+            $pingOn = PuiConfig::get('PUI_OUTBOUND_PING_ON_ACTIVAR_PRUEBA', '0');
+            $pingEnabled = $pingOn === true || $pingOn === 1 || $pingOn === '1';
+            if ($pingEnabled) {
+                try {
+                    (new HttpPuiOutboundClient())->verificarConectividadSaliente();
+                } catch (\RuntimeException $e) {
+                    PuiLogger::warning($requestId, 'activar_prueba_ping_fail', ['msg' => $e->getMessage()]);
+                    return $this->err($requestId, 502, 'PUI-EXT-502', 'No se pudo verificar conectividad con la PUI.');
+                }
             }
         }
 
@@ -148,25 +153,33 @@ class PuiReporteService
             return $this->err($requestId, 500, 'PUI-CFG-500', 'Configure INSTITUCION_RFC en pui.ini (4–13 caracteres) o envíe institucion_id en el cuerpo (mismo valor que en login hacia la PUI / simulador).');
         }
 
-        $this->estado->guardar($id, [
-            'id' => $id,
-            'curp' => $curp,
-            'institucion_id' => $institucionId,
-            'nombre' => (string) ($body['nombre'] ?? ''),
-            'primer_apellido' => (string) ($body['primer_apellido'] ?? ''),
-            'segundo_apellido' => (string) ($body['segundo_apellido'] ?? ''),
-            'rfc_criterio' => (string) ($body['rfc_criterio'] ?? ''),
-            'estado' => 'PROCESANDO',
-            'es_prueba' => $esPrueba,
-            'activo' => 1,
-        ]);
+        // activar-reporte-prueba (limitador / ráfagas): sin Oracle ni job fase 3 antes del JSON §8.2 — persistencia tras fastcgi_finish_request.
+        if ($esPrueba) {
+            return [
+                'status' => 200,
+                'body' => [
+                    'message' => 'La solicitud de activación del reporte de búsqueda se recibió correctamente.',
+                ],
+                'deferred' => [
+                    'requestId' => $requestId,
+                    'body' => $body,
+                    'id' => $id,
+                    'esPrueba' => true,
+                    'institucionId' => $institucionId,
+                    'persistirActivacionPrueba' => true,
+                    'marcarActivoPost200' => true,
+                ],
+            ];
+        }
+
+        $this->estado->guardar($id, $this->registroReporteProcesando($id, $body, $institucionId, false));
 
         // §7.2–7.3: el front HTTP debe enviar el 200 §8.2 y liberar al cliente antes de ejecutar fases (ver PuiFrontController).
 
         try {
             $f3Sec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
             $f3MinCol = max(1, intdiv($f3Sec + 59, 60));
-            $this->jobs->programarFase3($id, $esPrueba, $f3MinCol, $requestId);
+            $this->jobs->programarFase3($id, false, $f3MinCol, $requestId);
             PuiLogger::info($requestId, 'fase3_registrada', [
                 'id_reporte' => $id,
                 'job_reschedule_seconds' => $f3Sec,
@@ -193,16 +206,41 @@ class PuiReporteService
                 'requestId' => $requestId,
                 'body' => $body,
                 'id' => $id,
-                'esPrueba' => $esPrueba,
+                'esPrueba' => false,
                 'institucionId' => $institucionId,
+                'marcarActivoPost200' => false,
             ],
+        ];
+    }
+
+    /**
+     * Registro inicial PROCESANDO para PUI_REPORTES_ACTIVOS (mismas claves que guardar()).
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    private function registroReporteProcesando(string $id, array $body, string $institucionId, bool $esPrueba): array
+    {
+        $curp = strtoupper(trim((string) ($body['curp'] ?? '')));
+
+        return [
+            'id' => $id,
+            'curp' => $curp,
+            'institucion_id' => $institucionId,
+            'nombre' => (string) ($body['nombre'] ?? ''),
+            'primer_apellido' => (string) ($body['primer_apellido'] ?? ''),
+            'segundo_apellido' => (string) ($body['segundo_apellido'] ?? ''),
+            'rfc_criterio' => (string) ($body['rfc_criterio'] ?? ''),
+            'estado' => 'PROCESANDO',
+            'es_prueba' => $esPrueba,
+            'activo' => 1,
         ];
     }
 
     /**
      * §7.2 fases 1–2 solo después de que el simulador haya recibido el 200 de activar-reporte y haya guardado el id.
      *
-     * @param array{requestId:string, body:array<string,mixed>, id:string, esPrueba:bool, institucionId:string} $deferred
+     * @param array{requestId:string, body:array<string,mixed>, id:string, esPrueba:bool, institucionId:string, marcarActivoPost200?:bool, persistirActivacionPrueba?:bool} $deferred
      */
     public function runPostActivacionFases1y2(array $deferred): void
     {
@@ -216,6 +254,40 @@ class PuiReporteService
         }
 
         PuiLogger::setRequestContext($requestId);
+
+        if (!empty($deferred['persistirActivacionPrueba'])) {
+            try {
+                $this->estado->guardar($id, $this->registroReporteProcesando($id, $body, $institucionId, true));
+            } catch (\Throwable $e) {
+                PuiLogger::warning($requestId, 'activar_prueba_guardar_post_error', [
+                    'id_reporte' => $id,
+                    'msg' => $e->getMessage(),
+                ]);
+
+                return;
+            }
+        }
+
+        if (!empty($deferred['marcarActivoPost200'])) {
+            try {
+                $this->marcarEstado($id, 'ACTIVO');
+            } catch (\Throwable $e) {
+                PuiLogger::warning($requestId, 'activar_prueba_marcar_activo_post_error', [
+                    'id_reporte' => $id,
+                    'msg' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // activar-reporte-prueba: nunca ejecuta fases 1–2 ni salientes al simulador (limitador). E2E: POST /activar-reporte.
+        if ($esPrueba) {
+            PuiLogger::info($requestId, 'activar_prueba_post_fases_omitidas', [
+                'id_reporte' => $id,
+                'nota' => 'Persistencia post-200 aplicada; fases 1–2 no aplican a activar-reporte-prueba.',
+            ]);
+
+            return;
+        }
 
         $delayUs = (int) PuiConfig::get('PUI_SIMULADOR_SYNC_DELAY_US', 300000);
         if ($delayUs > 0) {

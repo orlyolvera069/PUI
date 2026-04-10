@@ -18,9 +18,13 @@ use App\Pui\Validation\PuiManualPayloadValidator;
  * - PUI_PATH_BUSQUEDA_FINALIZADA: ruta, default /busqueda-finalizada
  * - PUI_HTTP_RETRIES: reintentos (default 3)
  * - PUI_HTTP_RETRY_MS: base ms backoff exponencial (default 100)
+ * - PUI_OUTBOUND_PING_CACHE_TTL_SECONDS: no repetir ping saliente tras éxito (ráfagas activar-reporte-prueba); 0 = desactivar caché
  */
 class HttpPuiOutboundClient implements PuiOutboundClientInterface
 {
+    /** @var int UNIX hasta el cual este proceso puede omitir ping (misma ventana que caché en disco). */
+    private static $pingMemOkUntil = 0;
+
     public function notificarCoincidencia(array $payload): array
     {
         $path = (string) PuiConfig::get('PUI_PATH_NOTIFICAR_COINCIDENCIA', '/notificar-coincidencia');
@@ -79,9 +83,119 @@ class HttpPuiOutboundClient implements PuiOutboundClientInterface
      * GET opcional hacia PUI_OUTBOUND_BASE_URL + PUI_OUTBOUND_PING_PATH (vacío = raíz base).
      * Usado antes de activar-reporte-prueba para comprobar TLS/red (manual: conectividad en prueba).
      *
+     * Con ráfagas concurrentes, un único ping exitoso por ventana (caché + flock) evita saturar el simulador/FPM.
+     *
      * @throws \RuntimeException si cURL no está disponible, URL/token vacíos o timeout/red
      */
     public function verificarConectividadSaliente(): void
+    {
+        $base = rtrim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', ''), '/');
+        if ($base === '') {
+            throw new \RuntimeException('HttpPuiOutboundClient: defina PUI_OUTBOUND_BASE_URL.');
+        }
+
+        $ttl = max(0, (int) PuiConfig::get('PUI_OUTBOUND_PING_CACHE_TTL_SECONDS', 120));
+        $appPath = dirname(__DIR__, 2);
+        $cacheFile = $appPath . '/storage/pui/outbound_ping_ok';
+
+        if ($ttl > 0 && time() < self::$pingMemOkUntil) {
+            return;
+        }
+        if ($ttl > 0 && $this->isOutboundPingCacheFresh($cacheFile, $ttl)) {
+            self::$pingMemOkUntil = time() + $ttl;
+
+            return;
+        }
+        if ($ttl <= 0) {
+            $this->ejecutarPingConectividadSaliente();
+
+            return;
+        }
+
+        $dir = dirname($cacheFile);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+
+        $lockPath = $cacheFile . '.lock';
+        $fp = @fopen($lockPath, 'c+');
+        if (!is_resource($fp)) {
+            $this->ejecutarPingConectividadSaliente();
+            $this->markPingOk($ttl, $cacheFile);
+
+            return;
+        }
+
+        $lockNb = \defined('LOCK_NB') ? LOCK_NB : 0;
+        $gotLock = @flock($fp, LOCK_EX | $lockNb);
+        if (!$gotLock) {
+            fclose($fp);
+            $deadline = microtime(true) + 20.0;
+            while (microtime(true) < $deadline) {
+                if ($this->isOutboundPingCacheFresh($cacheFile, $ttl)) {
+                    self::$pingMemOkUntil = time() + $ttl;
+
+                    return;
+                }
+                usleep(50000);
+            }
+            $fp = @fopen($lockPath, 'c+');
+            if (!is_resource($fp)) {
+                $this->ejecutarPingConectividadSaliente();
+                $this->markPingOk($ttl, $cacheFile);
+
+                return;
+            }
+            if (!@flock($fp, LOCK_EX)) {
+                fclose($fp);
+                $this->ejecutarPingConectividadSaliente();
+                $this->markPingOk($ttl, $cacheFile);
+
+                return;
+            }
+        }
+
+        try {
+            if ($this->isOutboundPingCacheFresh($cacheFile, $ttl)) {
+                self::$pingMemOkUntil = time() + $ttl;
+
+                return;
+            }
+            $this->ejecutarPingConectividadSaliente();
+            $this->markPingOk($ttl, $cacheFile);
+        } finally {
+            if (isset($fp) && \is_resource($fp)) {
+                flock($fp, LOCK_UN);
+                fclose($fp);
+            }
+        }
+    }
+
+    private function markPingOk(int $ttl, string $cacheFile): void
+    {
+        @touch($cacheFile);
+        self::$pingMemOkUntil = time() + $ttl;
+    }
+
+    private function isOutboundPingCacheFresh(string $cacheFile, int $ttl): bool
+    {
+        if (!is_file($cacheFile)) {
+            return false;
+        }
+        $mtime = (int) @filemtime($cacheFile);
+        if ($mtime <= 0) {
+            return false;
+        }
+
+        return (time() - $mtime) < $ttl;
+    }
+
+    /**
+     * Ejecuta un GET de comprobación (sin usar caché).
+     *
+     * @throws \RuntimeException
+     */
+    private function ejecutarPingConectividadSaliente(): void
     {
         $base = rtrim((string) PuiConfig::get('PUI_OUTBOUND_BASE_URL', ''), '/');
         if ($base === '') {

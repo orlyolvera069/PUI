@@ -323,7 +323,7 @@ class PuiFrontController
             return false;
         }
 
-        $limit = (int) PuiConfig::get('PUI_RATE_LIMIT_MAX_REQUESTS', 60);
+        $limit = (int) PuiConfig::get('PUI_RATE_LIMIT_MAX_REQUESTS', 100);
         $window = (int) PuiConfig::get('PUI_RATE_LIMIT_WINDOW_SECONDS', 60);
 
         $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
@@ -404,7 +404,15 @@ class PuiFrontController
         ]);
 
         try {
-            $this->reportes->runPostActivacionFases1y2($deferred);
+            if ($this->shouldSkipSyncPostActivacionPrueba($deferred)) {
+                PuiLogger::info($requestId, 'activar_prueba_post_omitido_mismo_proceso', [
+                    'id_reporte' => (string) ($deferred['id'] ?? ''),
+                    'sapi' => PHP_SAPI,
+                    'nota' => 'cli-server monohilo: post-200 omitido para no serializar ráfagas. FPM: puede PUI_ACTIVAR_PRUEBA_SKIP_POST_SYNC=0 para persistir.',
+                ]);
+            } else {
+                $this->reportes->runPostActivacionFases1y2($deferred);
+            }
         } catch (\Throwable $e) {
             PuiLogger::error($requestId, 'activar_post_fases_excepcion', [
                 'class' => get_class($e),
@@ -412,6 +420,30 @@ class PuiFrontController
             ]);
         }
         exit;
+    }
+
+    /**
+     * El servidor embebido PHP (SAPI cli-server) es monohilo: tras el 200 el script seguía con runPost
+     * (MERGE Oracle, etc.) y la siguiente petición no se atendía hasta exit — las "concurrentes" se serializaban.
+     * En FPM/Apache hay varios workers; ahí sí puede ejecutarse persistencia post-respuesta sin bloquear todo el servidor.
+     *
+     * @param array<string,mixed> $deferred
+     */
+    private function shouldSkipSyncPostActivacionPrueba(array $deferred): bool
+    {
+        if (empty($deferred['esPrueba'])) {
+            return false;
+        }
+
+        $mode = PuiConfig::get('PUI_ACTIVAR_PRUEBA_SKIP_POST_SYNC', 'auto');
+        if ($mode === '1' || $mode === 1 || $mode === true) {
+            return true;
+        }
+        if ($mode === '0' || $mode === 0) {
+            return false;
+        }
+
+        return PHP_SAPI === 'cli-server';
     }
 
     /** Vacía buffers de salida para que el cliente reciba el 200 antes del trabajo posterior en el mismo proceso. */
