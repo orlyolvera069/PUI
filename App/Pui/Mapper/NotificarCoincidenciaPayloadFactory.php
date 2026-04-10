@@ -61,7 +61,7 @@ class NotificarCoincidenciaPayloadFactory
             $payload['tipo_evento'] = function_exists('mb_substr') ? mb_substr($tipoEvento, 0, 500) : substr($tipoEvento, 0, 500);
             $fe = $fechaEvento ?? gmdate('Y-m-d');
             $payload['fecha_evento'] = $fe;
-            $payload['descripcion_lugar_evento'] = self::descripcionLugarEvento($fase);
+            $payload['descripcion_lugar_evento'] = self::descripcionLugarEventoConSucursal($fase, $row);
             $payload['direccion_evento'] = $domicilio;
         }
         $payload['nombre_completo'] = $nombreCompleto;
@@ -171,5 +171,26 @@ class NotificarCoincidenciaPayloadFactory
             return 'Coincidencia búsqueda continua (fase 3)';
         }
         return 'Coincidencia (fase ' . $fase . ')';
+    }
+
+    /**
+     * Incluye nombre de sucursal del EVENTO cuando la consulta lo trae (fases 2–3).
+     *
+     * @param array<string,mixed> $row
+     */
+    private static function descripcionLugarEventoConSucursal(string $fase, array $row): string
+    {
+        $base = self::descripcionLugarEvento($fase);
+        $suc = trim((string) ($row['SUCURSAL'] ?? $row['sucursal'] ?? ''));
+        if ($suc === '') {
+            return self::limitLen($base, 500);
+        }
+        $sucEsc = self::sanitizeDomicilioTexto($suc, 420);
+        if ($sucEsc === '') {
+            return self::limitLen($base, 500);
+        }
+        $out = $base . ' — Sucursal: ' . $sucEsc;
+
+        return self::limitLen($out, 500);
     }
 }
