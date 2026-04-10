@@ -45,7 +45,7 @@ class PuiSearchOrchestratorService
         $fragmento = $this->fragmentoNombreDesdeActivar($body);
 
         try {
-            // —— Fase 1: §7.2 datos básicos. §8.2 nota 5: sin fila en CLIENTE se arma el cuerpo con activar-reporte.
+            // —— Fase 1: §7.2 datos básicos. Solo notificar-coincidencia si hay fila real en padrón CLIENTE (coincidencia).
             PuiLogger::info($requestId, 'fase1_inicio', ['id' => $id]);
             $curp = ManualValidators::normalizeCurp((string) ($body['curp'] ?? ''));
             $rowF1 = $this->cl->buscarFase1PorCurpExacta($curp);
@@ -53,9 +53,8 @@ class PuiSearchOrchestratorService
             if (!$desdePadron) {
                 PuiLogger::info($requestId, 'fase1_sin_padron', [
                     'id' => $id,
-                    'contexto' => '§7.2 fase 1 con datos de §8.2 (activar-reporte)',
+                    'contexto' => 'Sin fila en CLIENTE: no hay coincidencia fase 1; no se envía notificar-coincidencia.',
                 ]);
-                $rowF1 = $this->construirFilaClienteDesdeCuerpoActivar($body);
             }
 
             if ($fragmento === '') {
@@ -102,19 +101,21 @@ class PuiSearchOrchestratorService
                 ]);
             }
 
-            $payload = NotificarCoincidenciaPayloadFactory::desdeRegistroCl(
-                $rowF1,
-                $id,
-                $institucionId,
-                '1',
-                PuiReporteService::TIPO_F1,
-                false,
-                null
-            );
-            $this->enviarNotificacionValidada($requestId, $id, $institucionId, $outbound, $payload);
+            if ($desdePadron) {
+                $payload = NotificarCoincidenciaPayloadFactory::desdeRegistroCl(
+                    $rowF1,
+                    $id,
+                    $institucionId,
+                    '1',
+                    PuiReporteService::TIPO_F1,
+                    false,
+                    null
+                );
+                $this->enviarNotificacionValidada($requestId, $id, $institucionId, $outbound, $payload);
+            }
             PuiLogger::info($requestId, 'fase1_fin', [
                 'id' => $id,
-                'resultado' => $desdePadron ? 'notificacion_fase1_procesada' : 'notificacion_fase1_procesada_sin_padron',
+                'resultado' => $desdePadron ? 'notificacion_fase1_procesada' : 'fase1_sin_coincidencia_padron_notificacion_omitida',
             ]);
         } catch (\Throwable $e) {
             PuiLogger::warning($requestId, 'fase1_error', [
@@ -641,37 +642,6 @@ class PuiSearchOrchestratorService
                 'endpoint' => (string) ($linea['endpoint'] ?? ''),
             ]);
         }
-    }
-
-    /**
-     * Fila con alias de {@see CultivaClienteRepository} / {@see NotificarCoincidenciaPayloadFactory}
-     * cuando no existe registro en CLIENTE (§8.2 nota 5).
-     *
-     * @param array<string,mixed> $body Cuerpo validado de activar-reporte
-     * @return array<string,mixed>
-     */
-    private function construirFilaClienteDesdeCuerpoActivar(array $body): array
-    {
-        $curp = ManualValidators::normalizeCurp((string) ($body['curp'] ?? ''));
-
-        return [
-            'CODIGO_CLIENTE' => '',
-            'NOMBRE1' => trim((string) ($body['nombre'] ?? '')),
-            'NOMBRE2' => '',
-            'PRIMAPE' => trim((string) ($body['primer_apellido'] ?? '')),
-            'SEGAPE' => trim((string) ($body['segundo_apellido'] ?? '')),
-            'NOMBRE_COMPLETO' => '',
-            'RFC' => strtoupper(trim((string) ($body['rfc_criterio'] ?? ''))),
-            'CURP' => $curp,
-            'FECHA_NACIMIENTO' => isset($body['fecha_nacimiento']) ? trim((string) $body['fecha_nacimiento']) : '',
-            'SEXO' => strtoupper(trim((string) ($body['sexo_asignado'] ?? 'X'))),
-            'CALLE' => trim((string) ($body['calle'] ?? $body['direccion'] ?? '')),
-            'NUMERO' => trim((string) ($body['numero'] ?? '')),
-            'CODIGO_POSTAL' => trim((string) ($body['codigo_postal'] ?? '')),
-            'CDGPAI' => trim((string) ($body['colonia'] ?? '')),
-            'CDGMU' => trim((string) ($body['municipio_o_alcaldia'] ?? '')),
-            'ESTADO_NOMBRE' => trim((string) ($body['entidad_federativa'] ?? '')),
-        ];
     }
 
     /**
