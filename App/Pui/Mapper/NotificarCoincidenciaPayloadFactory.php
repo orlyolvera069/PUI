@@ -61,7 +61,7 @@ class NotificarCoincidenciaPayloadFactory
             $payload['tipo_evento'] = function_exists('mb_substr') ? mb_substr($tipoEvento, 0, 500) : substr($tipoEvento, 0, 500);
             $fe = $fechaEvento ?? gmdate('Y-m-d');
             $payload['fecha_evento'] = $fe;
-            $payload['descripcion_lugar_evento'] = self::descripcionLugarEventoConSucursal($fase, $row);
+            $payload['descripcion_lugar_evento'] = self::descripcionLugarEvento($fase, $row);
             $payload['direccion_evento'] = $domicilio;
         }
         $payload['nombre_completo'] = $nombreCompleto;
@@ -162,35 +162,24 @@ class NotificarCoincidenciaPayloadFactory
         return self::limitLen((string) $v, $maxLen);
     }
 
-    private static function descripcionLugarEvento(string $fase): string
+    /**
+     * @param array<string,mixed> $row Fila EVENTO⨝CLIENTE (incluye SUCURSAL cuando existe en EVENTO).
+     */
+    private static function descripcionLugarEvento(string $fase, array $row = []): string
     {
         if ($fase === '2') {
-            return 'Coincidencia búsqueda histórica (fase 2)';
+            $base = 'Coincidencia búsqueda histórica (fase 2)';
+        } elseif ($fase === '3') {
+            $base = 'Coincidencia búsqueda continua (fase 3)';
+        } else {
+            $base = 'Coincidencia (fase ' . $fase . ')';
         }
-        if ($fase === '3') {
-            return 'Coincidencia búsqueda continua (fase 3)';
-        }
-        return 'Coincidencia (fase ' . $fase . ')';
-    }
-
-    /**
-     * Incluye nombre de sucursal del EVENTO cuando la consulta lo trae (fases 2–3).
-     *
-     * @param array<string,mixed> $row
-     */
-    private static function descripcionLugarEventoConSucursal(string $fase, array $row): string
-    {
-        $base = self::descripcionLugarEvento($fase);
         $suc = trim((string) ($row['SUCURSAL'] ?? $row['sucursal'] ?? ''));
-        if ($suc === '') {
-            return self::limitLen($base, 500);
+        if ($suc !== '') {
+            $suc = self::sanitizeDomicilioTexto($suc, 200);
+            $base .= ' · Sucursal: ' . $suc;
         }
-        $sucEsc = self::sanitizeDomicilioTexto($suc, 420);
-        if ($sucEsc === '') {
-            return self::limitLen($base, 500);
-        }
-        $out = $base . ' — Sucursal: ' . $sucEsc;
 
-        return self::limitLen($out, 500);
+        return self::limitLen($base, 500);
     }
 }

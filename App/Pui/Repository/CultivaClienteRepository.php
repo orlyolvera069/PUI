@@ -140,8 +140,8 @@ class CultivaClienteRepository
 
         return <<<SQL
             TRIM({$e}.TIPO_EVENTO) AS TIPO_EVENTO,
-            TO_CHAR({$e}.FECHA_EVENTO, 'YYYY-MM-DD') AS FECHA_EVENTO,
             TRIM({$e}.SUCURSAL) AS SUCURSAL,
+            TO_CHAR({$e}.FECHA_EVENTO, 'YYYY-MM-DD') AS FECHA_EVENTO,
             TRIM({$e}.CALLE) AS CALLE,
             CAST(NULL AS VARCHAR2(50)) AS NUMERO,
             TRIM({$e}.COLONIA) AS CDGPAI,
