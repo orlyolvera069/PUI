@@ -98,6 +98,7 @@ class CultivaClienteRepository
             TRIM({$c}.CURP) AS CURP,
             TO_CHAR({$c}.FECHA_NACIMIENTO, 'YYYY-MM-DD') AS FECHA_NACIMIENTO,
             {$c}.SEXO AS SEXO,
+            TRIM({$c}.TELEFONO) AS TELEFONO,
             TRIM({$c}.CALLE) AS CALLE,
             CAST(NULL AS VARCHAR2(100)) AS NUMERO,
             TRIM({$c}.COLONIA) AS CDGPAI,

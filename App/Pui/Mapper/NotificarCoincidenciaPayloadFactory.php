@@ -99,10 +99,10 @@ class NotificarCoincidenciaPayloadFactory
     private static function domicilioParaFila(array $row): array
     {
         if (self::filaTieneDomicilioClienteEventoSeparados($row)) {
-            return self::domicilioDesdePrefijo($row, 'DOM_');
+            return self::domicilioDesdePrefijo($row, 'DOM_', false);
         }
 
-        return self::domicilioDesdeCl($row);
+        return self::domicilioDesdeCl($row, false);
     }
 
     /**
@@ -111,7 +111,7 @@ class NotificarCoincidenciaPayloadFactory
     private static function direccionEventoParaFila(array $row, array $domicilioFallback): array
     {
         if (self::filaTieneDomicilioClienteEventoSeparados($row)) {
-            return self::domicilioDesdePrefijo($row, 'EV_');
+            return self::domicilioDesdePrefijo($row, 'EV_', false);
         }
 
         return $domicilioFallback;
@@ -126,7 +126,7 @@ class NotificarCoincidenciaPayloadFactory
     /**
      * @param array<string,mixed> $row
      */
-    private static function domicilioDesdePrefijo(array $row, string $pref): array
+    private static function domicilioDesdePrefijo(array $row, string $pref, bool $incluirNumero): array
     {
         $mapped = [
             'CALLE' => $row[$pref . 'CALLE'] ?? '',
@@ -137,7 +137,7 @@ class NotificarCoincidenciaPayloadFactory
             'ESTADO_NOMBRE' => $row[$pref . 'ENTIDAD'] ?? '',
         ];
 
-        return self::domicilioDesdeCl($mapped);
+        return self::domicilioDesdeCl($mapped, $incluirNumero);
     }
 
     /** @param array<string,mixed> $row */
@@ -158,29 +158,31 @@ class NotificarCoincidenciaPayloadFactory
         return $d;
     }
 
-    /** @param array<string,mixed> $row */
-    private static function domicilioDesdeCl(array $row): array
+    /**
+     * @param array<string,mixed> $row
+     */
+    private static function domicilioDesdeCl(array $row, bool $incluirNumero = false): array
     {
-        // Manual: para evento/domicilio se requiere dirección, calle, número, colonia, código postal, municipio o alcaldía y entidad federativa.
         $calle = self::sanitizeDomicilioTexto((string) ($row['CALLE'] ?? ''), 500);
-        $num = trim((string) ($row['NUMERO'] ?? ''));
-        $numSan = $num !== '' ? self::sanitizeDomicilioTexto($num, 50) : '';
-        $direccionPlano = trim($calle . ($numSan !== '' ? ' ' . $numSan : ''));
         $cp = trim((string) ($row['CODIGO_POSTAL'] ?? ''));
         $colonia = self::sanitizeDomicilioTexto((string) ($row['CDGPAI'] ?? ''), 50);
         $municipio = self::sanitizeDomicilioTexto((string) ($row['CDGMU'] ?? ''), 100);
         $entidad = self::sanitizeDomicilioTexto((string) ($row['ESTADO_NOMBRE'] ?? $row['CDGEF'] ?? ''), 40);
 
-        // Manual regex permite campos con longitud mínima 0, por lo tanto, enviamos siempre claves aunque estén vacías.
-        return [
-            'direccion' => self::limitLen($direccionPlano !== '' ? $direccionPlano : $calle, 500),
+        $out = [
             'calle' => self::limitLen($calle, 50),
-            'numero' => self::limitLen($numSan, 20),
             'colonia' => self::limitLen($colonia, 50),
             'codigo_postal' => preg_match('/^\d{0,5}$/', $cp) ? $cp : '',
             'municipio_o_alcaldia' => self::limitLen($municipio, 100),
             'entidad_federativa' => self::limitLen($entidad, 40),
         ];
+        if ($incluirNumero) {
+            $num = trim((string) ($row['NUMERO'] ?? ''));
+            $numSan = $num !== '' ? self::sanitizeDomicilioTexto($num, 50) : '';
+            $out['numero'] = self::limitLen($numSan, 20);
+        }
+
+        return $out;
     }
 
     private static function mapSexo(string $sexo): ?string

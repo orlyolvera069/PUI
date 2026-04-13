@@ -123,16 +123,14 @@ class PuiManualPayloadValidator
             }
         }
 
-        // domicilio / direccion_evento
+        // domicilio / direccion_evento (sin direccion, numero en payload según integración)
         $validateDomicilio = function (mixed $obj, string $label) use (&$e): void {
             if (!is_array($obj)) {
                 $e[] = $label . ' debe ser objeto JSON';
                 return;
             }
             $requiredKeys = [
-                'direccion',
                 'calle',
-                'numero',
                 'colonia',
                 'codigo_postal',
                 'municipio_o_alcaldia',
@@ -144,9 +142,6 @@ class PuiManualPayloadValidator
                 }
             }
             // Regex de manual para campos; se evalúa sólo si la clave existe.
-            if (isset($obj['direccion']) && (!is_string($obj['direccion']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,500}$/u', $obj['direccion']))) {
-                $e[] = $label . '.direccion no cumple regex manual';
-            }
             if (isset($obj['calle']) && (!is_string($obj['calle']) || !preg_match('/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,#\'\\/:()\\-]{0,50}$/u', $obj['calle']))) {
                 $e[] = $label . '.calle no cumple regex manual';
             }
