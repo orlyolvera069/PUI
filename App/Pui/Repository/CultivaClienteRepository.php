@@ -108,7 +108,25 @@ class CultivaClienteRepository
     }
 
     /**
-     * Solo persona (fases 2–3: domicilio del evento viene de EVENTO).
+     * Domicilio en CLIENTE y teléfono (fases 2–3: distinto de la dirección del EVENTO).
+     */
+    private static function selectClienteDomicilioYTelefono(string $alias = 'C'): string
+    {
+        $c = $alias;
+
+        return <<<SQL
+            TRIM({$c}.TELEFONO) AS TELEFONO,
+            TRIM({$c}.CALLE) AS DOM_CALLE,
+            CAST(NULL AS VARCHAR2(50)) AS DOM_NUMERO,
+            TRIM({$c}.COLONIA) AS DOM_COLONIA,
+            TRIM({$c}.CP) AS DOM_CP,
+            TRIM({$c}.MUNICIPIO) AS DOM_MUNICIPIO,
+            TRIM({$c}.ENTIDAD_FEDERATIVA) AS DOM_ENTIDAD
+        SQL;
+    }
+
+    /**
+     * Solo persona (fases 2–3: domicilio del cliente y dirección del evento se proyectan aparte).
      *
      * @param string|null $eventAlias Si no es null (p. ej. E), CURP = NVL(CLIENTE, EVENTO) para LEFT JOIN sin fila en C.
      */
@@ -133,7 +151,10 @@ class CultivaClienteRepository
         SQL;
     }
 
-    /** Dirección del evento administrativo (EVENTO). */
+    /**
+     * Metadatos y dirección del evento administrativo (EVENTO).
+     * Calles del evento con prefijo EV_ para no colisionar con domicilio del cliente (DOM_*).
+     */
     private static function selectEventoProyeccion(string $alias = 'E'): string
     {
         $e = $alias;
@@ -142,12 +163,12 @@ class CultivaClienteRepository
             TRIM({$e}.TIPO_EVENTO) AS TIPO_EVENTO,
             TRIM({$e}.SUCURSAL) AS SUCURSAL,
             TO_CHAR({$e}.FECHA_EVENTO, 'YYYY-MM-DD') AS FECHA_EVENTO,
-            TRIM({$e}.CALLE) AS CALLE,
-            CAST(NULL AS VARCHAR2(50)) AS NUMERO,
-            TRIM({$e}.COLONIA) AS CDGPAI,
-            TRIM({$e}.CP) AS CODIGO_POSTAL,
-            TRIM({$e}.MUNICIPIO) AS CDGMU,
-            TRIM({$e}.ENTIDAD_FEDERATIVA) AS ESTADO_NOMBRE
+            TRIM({$e}.CALLE) AS EV_CALLE,
+            CAST(NULL AS VARCHAR2(50)) AS EV_NUMERO,
+            TRIM({$e}.COLONIA) AS EV_COLONIA,
+            TRIM({$e}.CP) AS EV_CP,
+            TRIM({$e}.MUNICIPIO) AS EV_MUNICIPIO,
+            TRIM({$e}.ENTIDAD_FEDERATIVA) AS EV_ENTIDAD
         SQL;
     }
 
@@ -287,7 +308,9 @@ class CultivaClienteRepository
             $params['wm'] = $wm19;
         }
 
-        $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', ' . self::selectEventoProyeccion('E')
+        $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', '
+            . self::selectClienteDomicilioYTelefono('C') . ', '
+            . self::selectEventoProyeccion('E')
             . ', ROWIDTOCHAR(E.ROWID) AS EVENTO_ROWID'
             . ", TO_CHAR(E.FECHA_EVENTO, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS FECHA_EVENTO_ISO"
             . " FROM {$from} WHERE " . implode(' AND ', $where)
@@ -345,7 +368,9 @@ class CultivaClienteRepository
             $where[] = self::condicionFechaEventoVentana();
         }
 
-        $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', ' . self::selectEventoProyeccion('E')
+        $sql = 'SELECT ' . self::selectClienteSoloPersona('C', 'E') . ', '
+            . self::selectClienteDomicilioYTelefono('C') . ', '
+            . self::selectEventoProyeccion('E')
             . " FROM {$from} WHERE " . implode(' AND ', $where)
             . ' ORDER BY E.FECHA_EVENTO, E.ROWID';
 

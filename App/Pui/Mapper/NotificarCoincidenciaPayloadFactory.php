@@ -44,43 +44,118 @@ class NotificarCoincidenciaPayloadFactory
             'segundo_apellido' => self::limitLen($materno, 50),
         ];
 
-        $domicilio = self::domicilioDesdeCl($row); // Siempre devuelve estructura completa.
+        $domicilio = self::domicilioParaFila($row);
+        $direccionEvento = self::direccionEventoParaFila($row, $domicilio);
 
         $sexo = self::mapSexo((string) ($row['SEXO'] ?? ''));
 
         $payload = [
             'curp' => $curp,
-            'lugar_nacimiento' => $lugar,
             'id' => $idBusqueda,
             'institucion_id' => strtoupper((string) $institucionId),
             // §7.2: cadena "1"|"2"|"3" en JSON (evita entero sin comillas que rompe validadores estrictos).
             'fase_busqueda' => $fase,
+            'nombre_completo' => $nombreCompleto,
         ];
-
-        if ($includeEventFields) {
-            $payload['tipo_evento'] = function_exists('mb_substr') ? mb_substr($tipoEvento, 0, 500) : substr($tipoEvento, 0, 500);
-            $fe = $fechaEvento ?? gmdate('Y-m-d');
-            $payload['fecha_evento'] = $fe;
-            $payload['descripcion_lugar_evento'] = self::descripcionLugarEvento($fase, $row);
-            $payload['direccion_evento'] = $domicilio;
-        }
-        $payload['nombre_completo'] = $nombreCompleto;
 
         $fn = (string) ($row['FECHA_NACIMIENTO'] ?? '');
         if ($fn !== '' && ManualValidators::fechaIso8601($fn)) {
             $payload['fecha_nacimiento'] = $fn;
         }
 
+        $payload['lugar_nacimiento'] = $lugar;
+
         if ($sexo !== null) {
             $payload['sexo_asignado'] = $sexo;
+        }
+
+        $tel = self::telefonoDesdeRow($row);
+        if ($tel !== null) {
+            $payload['telefono'] = $tel;
         }
 
         if ($domicilio !== []) {
             $payload['domicilio'] = $domicilio;
         }
+
+        if ($includeEventFields) {
+            $payload['tipo_evento'] = function_exists('mb_substr') ? mb_substr($tipoEvento, 0, 500) : substr($tipoEvento, 0, 500);
+            $fe = $fechaEvento ?? gmdate('Y-m-d');
+            $payload['fecha_evento'] = $fe;
+            $payload['descripcion_lugar_evento'] = self::descripcionLugarEvento($row);
+            $payload['direccion_evento'] = $direccionEvento;
+        }
         // Nota: $incluirEventoFase3 se mantiene por compatibilidad, pero el manual decide por fase.
 
         return $payload;
+    }
+
+    /**
+     * Fase 1: una sola proyección CLIENTE (CALLE, CDGPAI, …).
+     * Fases 2–3: DOM_* = CLIENTE, EV_* = EVENTO.
+     *
+     * @param array<string,mixed> $row
+     */
+    private static function domicilioParaFila(array $row): array
+    {
+        if (self::filaTieneDomicilioClienteEventoSeparados($row)) {
+            return self::domicilioDesdePrefijo($row, 'DOM_');
+        }
+
+        return self::domicilioDesdeCl($row);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private static function direccionEventoParaFila(array $row, array $domicilioFallback): array
+    {
+        if (self::filaTieneDomicilioClienteEventoSeparados($row)) {
+            return self::domicilioDesdePrefijo($row, 'EV_');
+        }
+
+        return $domicilioFallback;
+    }
+
+    /** @param array<string,mixed> $row */
+    private static function filaTieneDomicilioClienteEventoSeparados(array $row): bool
+    {
+        return array_key_exists('EV_CALLE', $row) || array_key_exists('DOM_CALLE', $row);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private static function domicilioDesdePrefijo(array $row, string $pref): array
+    {
+        $mapped = [
+            'CALLE' => $row[$pref . 'CALLE'] ?? '',
+            'NUMERO' => $row[$pref . 'NUMERO'] ?? '',
+            'CDGPAI' => $row[$pref . 'COLONIA'] ?? '',
+            'CODIGO_POSTAL' => $row[$pref . 'CP'] ?? '',
+            'CDGMU' => $row[$pref . 'MUNICIPIO'] ?? '',
+            'ESTADO_NOMBRE' => $row[$pref . 'ENTIDAD'] ?? '',
+        ];
+
+        return self::domicilioDesdeCl($mapped);
+    }
+
+    /** @param array<string,mixed> $row */
+    private static function telefonoDesdeRow(array $row): ?string
+    {
+        $t = trim((string) ($row['TELEFONO'] ?? ''));
+        if ($t === '') {
+            return null;
+        }
+        $d = preg_replace('/\D+/', '', $t);
+        if ($d === '') {
+            return null;
+        }
+        if (strlen($d) > 10) {
+            $d = substr($d, -10);
+        }
+
+        return $d;
     }
 
     /** @param array<string,mixed> $row */
@@ -163,23 +238,15 @@ class NotificarCoincidenciaPayloadFactory
     }
 
     /**
-     * @param array<string,mixed> $row Fila EVENTO⨝CLIENTE (incluye SUCURSAL cuando existe en EVENTO).
+     * Formato acordado con padrón: "Sucursal: {nombre}" (columna SUCURSAL en EVENTO).
+     *
+     * @param array<string,mixed> $row
      */
-    private static function descripcionLugarEvento(string $fase, array $row = []): string
+    private static function descripcionLugarEvento(array $row = []): string
     {
-        if ($fase === '2') {
-            $base = 'Coincidencia búsqueda histórica (fase 2)';
-        } elseif ($fase === '3') {
-            $base = 'Coincidencia búsqueda continua (fase 3)';
-        } else {
-            $base = 'Coincidencia (fase ' . $fase . ')';
-        }
         $suc = trim((string) ($row['SUCURSAL'] ?? $row['sucursal'] ?? ''));
-        if ($suc !== '') {
-            $suc = self::sanitizeDomicilioTexto($suc, 200);
-            $base .= ' · Sucursal: ' . $suc;
-        }
+        $suc = $suc !== '' ? self::sanitizeDomicilioTexto($suc, 200) : '';
 
-        return self::limitLen($base, 500);
+        return self::limitLen('Sucursal: ' . $suc, 500);
     }
 }
