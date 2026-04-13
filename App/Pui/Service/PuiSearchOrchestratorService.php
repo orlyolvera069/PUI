@@ -195,7 +195,15 @@ class PuiSearchOrchestratorService
                             true,
                             $fechaFinal
                         );
-                        $this->enviarNotificacionValidada($requestId, $id, $institucionId, $outbound, $payload);
+                        $evRowidF2 = strtoupper(trim((string) ($row['EVENTO_ROWID'] ?? $row['evento_rowid'] ?? '')));
+                        $this->enviarNotificacionValidada(
+                            $requestId,
+                            $id,
+                            $institucionId,
+                            $outbound,
+                            $payload,
+                            $evRowidF2 !== '' ? $evRowidF2 : null
+                        );
                         $nFase2++;
                     }
                     PuiLogger::info($requestId, 'fase2_fin', [
@@ -389,11 +397,12 @@ class PuiSearchOrchestratorService
             $curpRow = strtoupper(trim((string) ($row['CURP'] ?? '')));
             $eventoRowid = strtoupper(trim((string) ($row['EVENTO_ROWID'] ?? $row['evento_rowid'] ?? '')));
             if ($eventoRowid !== '') {
-                if ($this->coincidencias->existeNotificacionFase3PorEventoRowid($idReporte, $eventoRowid)) {
+                if ($this->coincidencias->existeNotificacionExitosaPorEventoRowid($idReporte, $eventoRowid)) {
                     $omitidosDedupe++;
                     PuiLogger::info($requestId, 'fase3_omitido_evento_ya_notificado', [
                         'id_reporte' => $idReporte,
                         'evento_rowid' => $eventoRowid,
+                        'motivo' => 'mismo_ROWID_ya_notificado_fase2_o_fase3',
                     ]);
                     continue;
                 }

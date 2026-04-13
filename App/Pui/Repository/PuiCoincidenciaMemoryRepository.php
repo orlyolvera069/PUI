@@ -64,6 +64,31 @@ class PuiCoincidenciaMemoryRepository
         return false;
     }
 
+    public function existeNotificacionExitosaPorEventoRowid(string $idReporte, string $eventoRowid): bool
+    {
+        $rid = strtoupper(trim($eventoRowid));
+        if ($rid === '') {
+            return false;
+        }
+        foreach (self::$eventos as $ev) {
+            $r = (string) ($ev['reporte_id'] ?? $ev['id_reporte'] ?? '');
+            $er = strtoupper(trim((string) ($ev['evento_rowid'] ?? '')));
+            $http = (int) ($ev['http_status'] ?? 0);
+            $ep = (string) ($ev['endpoint'] ?? '');
+            if (
+                $r === $idReporte
+                && $er === $rid
+                && $ep === 'notificar-coincidencia'
+                && $http >= 200
+                && $http < 300
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function contarNotificacionesPorReporte(string $idReporte): int
     {
         $n = 0;

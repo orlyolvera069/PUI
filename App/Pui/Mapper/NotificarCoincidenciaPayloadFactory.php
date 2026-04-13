@@ -47,7 +47,7 @@ class NotificarCoincidenciaPayloadFactory
         $domicilio = self::domicilioParaFila($row);
         $direccionEvento = self::direccionEventoParaFila($row, $domicilio);
 
-        $sexo = self::mapSexo((string) ($row['SEXO'] ?? ''));
+        $sexo = self::sexoAsignadoDesdeRegistro($curp, (string) ($row['SEXO'] ?? ''));
 
         $payload = [
             'curp' => $curp,
@@ -65,9 +65,7 @@ class NotificarCoincidenciaPayloadFactory
 
         $payload['lugar_nacimiento'] = $lugar;
 
-        if ($sexo !== null) {
-            $payload['sexo_asignado'] = $sexo;
-        }
+        $payload['sexo_asignado'] = $sexo;
 
         $tel = self::telefonoDesdeRow($row);
         if ($tel !== null) {
@@ -185,24 +183,67 @@ class NotificarCoincidenciaPayloadFactory
         return $out;
     }
 
-    private static function mapSexo(string $sexo): ?string
+    /**
+     * §7.2 sexo_asignado: H hombres, M mujeres, X resto.
+     * PRIORIDAD 1: CURP válida — carácter 11 (índice 10): H hombre, M mujer (INE/RENAPO).
+     * PRIORIDAD 2: columna SEXO (p. ej. F/M inglés: M=Masculino→H, F=Femenino→M; no confundir con CURP).
+     */
+    private static function sexoAsignadoDesdeRegistro(string $curpNorm, string $sexoColumna): string
+    {
+        $desdeCurp = self::sexoDesdeCurpCaracter11($curpNorm);
+        if ($desdeCurp !== null) {
+            return $desdeCurp;
+        }
+
+        return self::mapSexoDesdeColumnaPadron($sexoColumna);
+    }
+
+    /** H o M según CURP, o null si no aplica (extranjeros NE, CURP inválida, etc.). */
+    private static function sexoDesdeCurpCaracter11(string $curp): ?string
+    {
+        if (!ManualValidators::curpOficial($curp)) {
+            return null;
+        }
+        $ch = strtoupper(substr($curp, 10, 1));
+        if ($ch === 'H') {
+            return 'H';
+        }
+        if ($ch === 'M') {
+            return 'M';
+        }
+
+        return null;
+    }
+
+    private static function mapSexoDesdeColumnaPadron(string $sexo): string
     {
         $s = strtoupper(trim($sexo));
         if ($s === '' || $s === 'X') {
             return 'X';
         }
-        if (in_array($s, ['M', 'H'], true)) {
-            return $s;
-        }
-        if (in_array($s, ['F', 'E'], true)) {
-            return 'M';
+        if ($s === 'HOMBRE' || $s === 'MASCULINO') {
+            return 'H';
         }
         if ($s === 'MUJER' || $s === 'FEMENINO') {
             return 'M';
         }
-        if ($s === 'HOMBRE' || $s === 'MASCULINO') {
+        if ($s === '1') {
             return 'H';
         }
+        if ($s === '2') {
+            return 'M';
+        }
+        if ($s === 'H') {
+            return 'H';
+        }
+        if ($s === 'F' || $s === 'E') {
+            return 'M';
+        }
+        // Una sola M en catálogo suele ser Masculino (inglés), no “Mujer” del manual PUI.
+        if ($s === 'M') {
+            return 'H';
+        }
+
         return 'X';
     }
 

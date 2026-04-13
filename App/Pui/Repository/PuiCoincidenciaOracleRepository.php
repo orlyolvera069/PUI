@@ -218,4 +218,35 @@ class PuiCoincidenciaOracleRepository
 
         return (int) (($row['CNT'] ?? $row['cnt'] ?? 0)) > 0;
     }
+
+    /**
+     * Mismo EVENTO (ROWID) no debe contarse dos veces: puede notificarse en fase 2 (histórico) y volver a
+     * aparecer en fase 3 (continua). Si ya hubo notificación §7.2 exitosa con ese ROWID, no repetir.
+     */
+    public function existeNotificacionExitosaPorEventoRowid(string $idReporte, string $eventoRowid): bool
+    {
+        $db = new Database();
+        if ($db->db_activa === null) {
+            return false;
+        }
+        $rid = strtoupper(trim($eventoRowid));
+        if ($rid === '') {
+            return false;
+        }
+        $sql = <<<'SQL'
+            SELECT COUNT(1) AS CNT
+            FROM PUI_COINCIDENCIAS
+            WHERE ID_REPORTE = :id_reporte
+              AND EVENTO_ROWID = :evento_rowid
+              AND ENDPOINT = 'notificar-coincidencia'
+              AND HTTP_STATUS >= 200
+              AND HTTP_STATUS < 300
+        SQL;
+        $row = $db->queryOne($sql, [
+            'id_reporte' => $idReporte,
+            'evento_rowid' => $rid,
+        ]);
+
+        return (int) (($row['CNT'] ?? $row['cnt'] ?? 0)) > 0;
+    }
 }
