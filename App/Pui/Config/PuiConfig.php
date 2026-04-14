@@ -79,6 +79,9 @@ class PuiConfig
         'PUI_OUTBOUND_PING_ON_ACTIVAR_PRUEBA',
         'PUI_ACTIVAR_PRUEBA_SKIP_POST_SYNC',
         'PUI_PADRON_SCHEMA',
+        'PUI_FASE3_DAEMON_SLEEP_HOURS',
+        'PUI_FASE3_JOB_INTERVAL_HOURS',
+        'PUI_FASE3_STALE_LOCK_HOURS',
         'PUI_FASE3_DAEMON_SLEEP_SECONDS',
         'PUI_FASE3_JOB_INTERVAL_SECONDS',
         'PUI_FASE3_STALE_LOCK_SECONDS',
@@ -363,5 +366,83 @@ class PuiConfig
             }
         }
         return false;
+    }
+
+    /**
+     * Horas de `pui.ini` → segundos para temporizadores (mínimo 1 s). Decimales permitidos (p. ej. 0.5 = 30 min).
+     */
+    private static function hoursConfigToSeconds(float $hours, float $defaultHours): int
+    {
+        if ($hours <= 0 || !is_finite($hours)) {
+            $hours = $defaultHours;
+        }
+
+        return max(1, (int) round($hours * 3600));
+    }
+
+    /**
+     * Intervalo entre ticks del daemon (`run-daemon` / sleep interno). Preferir PUI_FASE3_DAEMON_SLEEP_HOURS.
+     */
+    public static function fase3DaemonSleepSeconds(): int
+    {
+        self::ensureLoaded();
+        $all = self::$data ?? [];
+        if (array_key_exists('PUI_FASE3_DAEMON_SLEEP_HOURS', $all)) {
+            return self::hoursConfigToSeconds((float) $all['PUI_FASE3_DAEMON_SLEEP_HOURS'], 1.0);
+        }
+        $envH = getenv('PUI_FASE3_DAEMON_SLEEP_HOURS');
+        if ($envH !== false && $envH !== '') {
+            return self::hoursConfigToSeconds((float) $envH, 1.0);
+        }
+        if (array_key_exists('PUI_FASE3_DAEMON_SLEEP_SECONDS', $all)) {
+            return max(1, (int) $all['PUI_FASE3_DAEMON_SLEEP_SECONDS']);
+        }
+
+        return max(1, (int) self::get('PUI_FASE3_DAEMON_SLEEP_SECONDS', 3600));
+    }
+
+    /**
+     * Tiempo hasta la siguiente ventana elegible del mismo job (RUN_AT tras marcarProcesado). Preferir PUI_FASE3_JOB_INTERVAL_HOURS.
+     */
+    public static function fase3JobIntervalSeconds(): int
+    {
+        self::ensureLoaded();
+        $all = self::$data ?? [];
+        if (array_key_exists('PUI_FASE3_JOB_INTERVAL_HOURS', $all)) {
+            return self::hoursConfigToSeconds((float) $all['PUI_FASE3_JOB_INTERVAL_HOURS'], 1.0);
+        }
+        $envH = getenv('PUI_FASE3_JOB_INTERVAL_HOURS');
+        if ($envH !== false && $envH !== '') {
+            return self::hoursConfigToSeconds((float) $envH, 1.0);
+        }
+        if (array_key_exists('PUI_FASE3_JOB_INTERVAL_SECONDS', $all)) {
+            return max(1, (int) $all['PUI_FASE3_JOB_INTERVAL_SECONDS']);
+        }
+
+        return max(1, (int) self::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 3600));
+    }
+
+    /**
+     * Umbral para reencolar RUNNING huérfanos. Preferir PUI_FASE3_STALE_LOCK_HOURS.
+     * Nunca por debajo de 2× el intervalo del daemon (evita marcar como huérfano un job lento legítimo).
+     */
+    public static function fase3StaleLockSeconds(): int
+    {
+        self::ensureLoaded();
+        $all = self::$data ?? [];
+        $base = 7200;
+        if (array_key_exists('PUI_FASE3_STALE_LOCK_HOURS', $all)) {
+            $base = self::hoursConfigToSeconds((float) $all['PUI_FASE3_STALE_LOCK_HOURS'], 2.0);
+        } elseif (($envH = getenv('PUI_FASE3_STALE_LOCK_HOURS')) !== false && $envH !== '') {
+            $base = self::hoursConfigToSeconds((float) $envH, 2.0);
+        } elseif (array_key_exists('PUI_FASE3_STALE_LOCK_SECONDS', $all)) {
+            $base = max(1, (int) $all['PUI_FASE3_STALE_LOCK_SECONDS']);
+        } else {
+            $base = max(1, (int) self::get('PUI_FASE3_STALE_LOCK_SECONDS', 7200));
+        }
+
+        $daemonSec = self::fase3DaemonSleepSeconds();
+
+        return max(120, $base, 2 * $daemonSec);
     }
 }

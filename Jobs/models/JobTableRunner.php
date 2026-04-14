@@ -27,11 +27,7 @@ class JobTableRunner
         } catch (\Throwable $e) {
             $runRid = 'job-runner-' . uniqid('', true);
         }
-        // Umbral alto por defecto: la fase 3 puede superar varios timeouts HTTP; un valor ~90s re-encolaba jobs aún vivos.
-        $staleLockSeconds = max(
-            120,
-            (int) PuiConfig::get('PUI_FASE3_STALE_LOCK_SECONDS', 900)
-        );
+        $staleLockSeconds = max(120, PuiConfig::fase3StaleLockSeconds());
         $jobsRepo->requeueStaleRunning($staleLockSeconds, $runRid);
         $jobs = $jobsRepo->obtenerJobsPendientes($limit);
         $resumenCandidatos = [];
@@ -56,7 +52,7 @@ class JobTableRunner
             if ($id <= 0) {
                 continue;
             }
-            $rescheduleSec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
+            $rescheduleSec = PuiConfig::fase3JobIntervalSeconds();
             if (!$jobsRepo->tomarJob($id, $workerId, $runRid)) {
                 PuiLogger::warning($runRid, 'job_tomar_fallido', [
                     'job_id' => $id,
@@ -114,7 +110,13 @@ class JobTableRunner
                     $orchestrator->ejecutarFase3PorReporte($requestId, $idReporte, $esPrueba);
 
                     if ($reportesRepo->estaActivo($idReporte)) {
-                        $jobsRepo->marcarProcesado($id, $rescheduleSec);
+                        if (!$jobsRepo->marcarProcesado($id, $rescheduleSec, $runRid)) {
+                            PuiLogger::warning($runRid, 'fase3_marcar_procesado_omitido', [
+                                'job_id' => $id,
+                                'id_reporte' => $idReporte,
+                                'nota' => 'El job no estaba RUNNING (p. ej. cancelado en paralelo) o no se pudo confirmar PENDING.',
+                            ]);
+                        }
                         $procesados++;
                     } else {
                         $jobsRepo->cancelarJob($id);
@@ -133,17 +135,31 @@ class JobTableRunner
                 ) {
                     $jobsRepo->cancelarJob($id);
                 } else {
-                    if ($isResyncNotificar || $isResyncFinalizada) {
-                        $jobsRepo->marcarErrorConBackoff($id, $e->getMessage());
-                    } else {
-                        $jobsRepo->marcarError($id, $e->getMessage());
+                    $marcado = $isResyncNotificar || $isResyncFinalizada
+                        ? $jobsRepo->marcarErrorConBackoff($id, $e->getMessage(), $runRid)
+                        : $jobsRepo->marcarError($id, $e->getMessage(), $runRid);
+                    if (!$marcado) {
+                        PuiLogger::warning($runRid, 'marcar_error_sin_efecto', [
+                            'job_id' => $id,
+                            'nota' => 'El job ya no estaba RUNNING (p. ej. cancelación concurrente).',
+                        ]);
                     }
                     $errores++;
                 }
             } finally {
-                $jobsRepo->liberarLock($id, $rescheduleSec);
+                try {
+                    $jobsRepo->liberarLock($id, $rescheduleSec, $runRid);
+                } catch (\Throwable $t) {
+                    PuiLogger::warning($runRid, 'job_finally_liberarLock_excepcion', [
+                        'job_id' => $id,
+                        'msg' => $t->getMessage(),
+                        'class' => \get_class($t),
+                    ]);
+                }
             }
         }
+
+        $jobsRepo->requeueStaleRunning($staleLockSeconds, $runRid);
 
         return ['procesados' => $procesados, 'errores' => $errores];
     }

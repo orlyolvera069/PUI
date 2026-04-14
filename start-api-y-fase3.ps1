@@ -84,6 +84,32 @@ function Test-Fase3DaemonRunning {
     return $false
 }
 
+function Get-Fase3DaemonSleepSeconds {
+    param([string]$ProjectRoot)
+    $iniPath = Join-Path $ProjectRoot 'App\config\pui.ini'
+    $defaultHours = 1.0
+    if (-not (Test-Path -LiteralPath $iniPath)) {
+        return [Math]::Max(1, [int][Math]::Round($defaultHours * 3600))
+    }
+    $content = Get-Content -LiteralPath $iniPath -ErrorAction SilentlyContinue
+    if ($null -eq $content) {
+        return [Math]::Max(1, [int][Math]::Round($defaultHours * 3600))
+    }
+    foreach ($line in $content) {
+        if ($line -match '^\s*PUI_FASE3_DAEMON_SLEEP_HOURS\s*=\s*([0-9]*\.?[0-9]+)') {
+            $h = [double]$Matches[1]
+            if ($h -le 0) { $h = $defaultHours }
+            return [Math]::Max(1, [int][Math]::Round($h * 3600))
+        }
+    }
+    foreach ($line in $content) {
+        if ($line -match '^\s*PUI_FASE3_DAEMON_SLEEP_SECONDS\s*=\s*(\d+)') {
+            return [Math]::Max(1, [int]$Matches[1])
+        }
+    }
+    return [Math]::Max(1, [int][Math]::Round($defaultHours * 3600))
+}
+
 # --- API ---
 if (Test-ApiPhpServerRunning) {
     Write-Host 'API ya está corriendo'
@@ -101,9 +127,10 @@ if (Test-ApiPhpServerRunning) {
 if (Test-Fase3DaemonRunning) {
     Write-Host 'Daemon ya está corriendo'
 } else {
+    $daemonSleepSec = Get-Fase3DaemonSleepSeconds -ProjectRoot $ProjectRoot
     $daemonArgs = @(
         '-f', 'Jobs/controllers/JobTableRunner.php',
-        'run-daemon', '30', '20',
+        'run-daemon', "$daemonSleepSec", '20',
         'App/storage/pui/pui_fase3_runner.lock'
     )
     Start-Process -FilePath 'php' -ArgumentList $daemonArgs -WorkingDirectory $ProjectRoot -WindowStyle Hidden

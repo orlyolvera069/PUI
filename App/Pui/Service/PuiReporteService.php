@@ -177,7 +177,7 @@ class PuiReporteService
         // §7.2–7.3: el front HTTP debe enviar el 200 §8.2 y liberar al cliente antes de ejecutar fases (ver PuiFrontController).
 
         try {
-            $f3Sec = max(1, (int) PuiConfig::get('PUI_FASE3_JOB_INTERVAL_SECONDS', 30));
+            $f3Sec = PuiConfig::fase3JobIntervalSeconds();
             $f3MinCol = max(1, intdiv($f3Sec + 59, 60));
             $this->jobs->programarFase3($id, false, $f3MinCol, $requestId);
             PuiLogger::info($requestId, 'fase3_registrada', [
@@ -508,7 +508,7 @@ class PuiReporteService
                 return;
             }
 
-            $sleepSeconds = max(1, (int) PuiConfig::get('PUI_FASE3_DAEMON_SLEEP_SECONDS', 30));
+            $sleepSeconds = PuiConfig::fase3DaemonSleepSeconds();
             $recentSeconds = max(60, 2 * $sleepSeconds);
 
             if (is_file($lockFile)) {

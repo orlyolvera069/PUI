@@ -105,7 +105,7 @@ if (isset($argv[1])) {
             echo "run-once [limit]\n";
             echo "run-batch [iteraciones] [limit]\n";
             echo "requeue-failed\n";
-            echo "run-daemon [sleepSeconds=30] [limit=20] [lockFile]\n";
+            echo "run-daemon [sleepSeconds] [limit=20] [lockFile] — sleep en segundos (ver PUI_FASE3_DAEMON_SLEEP_HOURS en pui.ini)\n";
             break;
         default:
             echo "Comando no reconocido. Usa 'help'.\n";

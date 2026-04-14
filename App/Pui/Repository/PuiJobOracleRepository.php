@@ -254,6 +254,53 @@ class PuiJobOracleRepository
         }
     }
 
+    /**
+     * Estado actual del job (columna STATUS), o cadena vacía si no hay fila.
+     */
+    private function obtenerStatusJob(Database $db, int $id, ?string $requestId): string
+    {
+        $rows = $this->executeQueryAll(
+            $db,
+            'SELECT STATUS FROM PUI_JOBS WHERE ID = :id',
+            ['id' => $id],
+            'obtenerStatusJob',
+            $requestId,
+            null
+        );
+        $r = $rows[0] ?? null;
+        if ($r === null) {
+            return '';
+        }
+
+        return strtoupper(trim((string) ($r['STATUS'] ?? $r['status'] ?? '')));
+    }
+
+    /**
+     * Último recurso si el job sigue RUNNING tras intentar liberar lock (evita filas colgadas).
+     */
+    private function forzarReencolarDesdeRunning(
+        Database $db,
+        int $id,
+        int $intervalSeconds,
+        string $requestId
+    ): void {
+        $intervalSeconds = max(1, $intervalSeconds);
+        $sql = <<<SQL
+            UPDATE PUI_JOBS
+            SET STATUS = 'RETRY',
+                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_seconds, 'SECOND'),
+                LOCKED_BY = NULL,
+                LOCKED_AT = NULL,
+                UPDATED_AT = SYSTIMESTAMP
+            WHERE ID = :id
+              AND STATUS = 'RUNNING'
+        SQL;
+        $this->tryInsert($db, $sql, [
+            'id' => $id,
+            'interval_seconds' => $intervalSeconds,
+        ], 'forzarReencolarDesdeRunning', $requestId, null);
+    }
+
     public function programarFase3(string $idReporte, bool $esPrueba, int $intervalMinutes = 15, ?string $requestId = null): void
     {
         $db = new Database();
@@ -295,7 +342,7 @@ class PuiJobOracleRepository
                 VALUES (S.JOB_TYPE, S.ID_REPORTE, 'PENDING', SYSTIMESTAMP, 0, 10, S.INTERVAL_MINUTES, S.PAYLOAD_JSON, SYSTIMESTAMP)
         SQL;
 
-        // INTERVAL_MINUTES en tabla: referencia aproximada (compat); el runner usa PUI_FASE3_JOB_INTERVAL_SECONDS.
+        // INTERVAL_MINUTES en tabla: referencia aproximada (compat); el runner usa PUI_FASE3_JOB_INTERVAL_HOURS (→ segundos).
         $this->executeInsert($db, $sql, [
             'job_type' => self::JOB_FASE3_SCAN,
             'id_reporte' => $idReporte,
@@ -439,9 +486,12 @@ class PuiJobOracleRepository
     }
 
     /**
-     * @param int $intervalSeconds Segundos hasta la próxima ejecución elegible (RUN_AT). Alineado con PUI_FASE3_JOB_INTERVAL_SECONDS.
+     * Marca el job como pendiente tras ejecución correcta. Solo afecta filas en RUNNING (evita pisar CANCELLED).
+     *
+     * @param int $intervalSeconds Segundos hasta la próxima ejecución elegible (RUN_AT). Alineado con PUI_FASE3_JOB_INTERVAL_HOURS.
+     * @return bool true si quedó en PENDING
      */
-    public function marcarProcesado(int $id, int $intervalSeconds = 30, ?string $requestId = null): void
+    public function marcarProcesado(int $id, int $intervalSeconds = 30, ?string $requestId = null): bool
     {
         $db = new Database();
         if ($db->db_activa === null) {
@@ -449,6 +499,7 @@ class PuiJobOracleRepository
         }
 
         $intervalSeconds = max(1, $intervalSeconds);
+        $rid = $requestId ?? $this->anonymousRequestId();
 
         $sql = <<<SQL
             UPDATE PUI_JOBS
@@ -460,49 +511,102 @@ class PuiJobOracleRepository
                 LAST_ERROR = NULL,
                 UPDATED_AT = SYSTIMESTAMP
             WHERE ID = :id
+              AND STATUS = 'RUNNING'
         SQL;
         $this->executeInsert($db, $sql, [
             'id' => $id,
             'interval_seconds' => $intervalSeconds,
-        ], 'marcarProcesado', $requestId, ['job_id' => $id], null);
+        ], 'marcarProcesado', $rid, ['job_id' => $id], null);
+
+        $st = $this->obtenerStatusJob($db, $id, $rid);
+        if ($st === 'PENDING') {
+            return true;
+        }
+        if ($st === 'RUNNING') {
+            PuiLogger::warning($rid, 'marcarProcesado_job_sigue_running', ['job_id' => $id]);
+        }
+
+        return false;
     }
 
     /**
+     * Libera lock de un job RUNNING (p. ej. finally del runner). No relanza excepciones para no tumbar el daemon.
+     *
      * @param int $intervalSeconds Segundos hasta RUN_AT al liberar lock (misma semántica que marcarProcesado).
      */
     public function liberarLock(int $id, int $intervalSeconds = 30, ?string $requestId = null): void
     {
-        $db = new Database();
-        if ($db->db_activa === null) {
+        $rid = $requestId ?? $this->anonymousRequestId();
+        $intervalSeconds = max(1, $intervalSeconds);
+
+        try {
+            $db = new Database();
+            if ($db->db_activa === null) {
+                return;
+            }
+
+            $sql = <<<SQL
+                UPDATE PUI_JOBS
+                SET
+                    LOCKED_AT = NULL,
+                    LOCKED_BY = NULL,
+                    STATUS = 'PENDING',
+                    RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_seconds, 'SECOND'),
+                    UPDATED_AT = SYSTIMESTAMP
+                WHERE ID = :id
+                  AND STATUS = 'RUNNING'
+            SQL;
+            $this->executeInsert($db, $sql, [
+                'id' => $id,
+                'interval_seconds' => $intervalSeconds,
+            ], 'liberarLock', $rid, ['job_id' => $id], null);
+        } catch (DatabaseUnavailableException $e) {
+            PuiLogger::warning($rid, 'liberarLock_db_no_disponible', [
+                'job_id' => $id,
+                'msg' => $e->getMessage(),
+            ]);
+
+            return;
+        } catch (\Throwable $e) {
+            PuiLogger::warning($rid, 'liberarLock_error', [
+                'job_id' => $id,
+                'msg' => $e->getMessage(),
+                'class' => \get_class($e),
+            ]);
+
             return;
         }
 
-        $intervalSeconds = max(1, $intervalSeconds);
-
-        $sql = <<<SQL
-            UPDATE PUI_JOBS
-            SET
-                LOCKED_AT = NULL,
-                LOCKED_BY = NULL,
-                STATUS = 'PENDING',
-                RUN_AT = SYSTIMESTAMP + NUMTODSINTERVAL(:interval_seconds, 'SECOND'),
-                UPDATED_AT = SYSTIMESTAMP
-            WHERE ID = :id
-              AND STATUS = 'RUNNING'
-        SQL;
-        $this->tryInsert($db, $sql, [
-            'id' => $id,
-            'interval_seconds' => $intervalSeconds,
-        ], 'liberarLock', $requestId, null);
+        try {
+            $db = new Database();
+            if ($db->db_activa === null) {
+                return;
+            }
+            $st = $this->obtenerStatusJob($db, $id, $rid);
+            if ($st !== 'RUNNING') {
+                return;
+            }
+            PuiLogger::warning($rid, 'job_sigue_running_tras_liberarLock', ['job_id' => $id]);
+            $this->forzarReencolarDesdeRunning($db, $id, $intervalSeconds, $rid);
+        } catch (\Throwable $e) {
+            PuiLogger::warning($rid, 'liberarLock_verificacion_fallo', [
+                'job_id' => $id,
+                'msg' => $e->getMessage(),
+            ]);
+        }
     }
 
-    public function marcarError(int $id, string $error, ?string $requestId = null): void
+    /**
+     * @return bool true si el job estaba RUNNING y pasó a RETRY o FAILED
+     */
+    public function marcarError(int $id, string $error, ?string $requestId = null): bool
     {
         $db = new Database();
         if ($db->db_activa === null) {
             PuiLogger::throwDatabaseUnavailable();
         }
 
+        $rid = $requestId ?? $this->anonymousRequestId();
         $sql = <<<SQL
             UPDATE PUI_JOBS
             SET ATTEMPTS = ATTEMPTS + 1,
@@ -513,11 +617,16 @@ class PuiJobOracleRepository
                 LOCKED_AT = NULL,
                 UPDATED_AT = SYSTIMESTAMP
             WHERE ID = :id
+              AND STATUS = 'RUNNING'
         SQL;
         $this->executeInsert($db, $sql, [
             'id' => $id,
             'last_error' => substr($error, 0, 3900),
-        ], 'marcarError', $requestId, ['job_id' => $id, 'last_error_len' => strlen($error)], null);
+        ], 'marcarError', $rid, ['job_id' => $id, 'last_error_len' => strlen($error)], null);
+
+        $st = $this->obtenerStatusJob($db, $id, $rid);
+
+        return $st === 'RETRY' || $st === 'FAILED';
     }
 
     public function requeueFailed(?string $requestId = null): void
@@ -627,14 +736,17 @@ class PuiJobOracleRepository
 
     /**
      * Backoff exponencial para jobs de resincronización.
+     *
+     * @return bool true si el job estaba RUNNING y pasó a RETRY o FAILED
      */
-    public function marcarErrorConBackoff(int $id, string $error, ?string $requestId = null): void
+    public function marcarErrorConBackoff(int $id, string $error, ?string $requestId = null): bool
     {
         $db = new Database();
         if ($db->db_activa === null) {
             PuiLogger::throwDatabaseUnavailable();
         }
 
+        $rid = $requestId ?? $this->anonymousRequestId();
         $sql = <<<SQL
             UPDATE PUI_JOBS
             SET ATTEMPTS = ATTEMPTS + 1,
@@ -645,10 +757,15 @@ class PuiJobOracleRepository
                 LOCKED_AT = NULL,
                 UPDATED_AT = SYSTIMESTAMP
             WHERE ID = :id
+              AND STATUS = 'RUNNING'
         SQL;
         $this->executeInsert($db, $sql, [
             'id' => $id,
             'last_error' => substr($error, 0, 3900),
-        ], 'marcarErrorConBackoff', $requestId, ['job_id' => $id], null);
+        ], 'marcarErrorConBackoff', $rid, ['job_id' => $id], null);
+
+        $st = $this->obtenerStatusJob($db, $id, $rid);
+
+        return $st === 'RETRY' || $st === 'FAILED';
     }
 }
