@@ -73,10 +73,11 @@ function Test-ApiPhpServerRunning {
 }
 
 function Test-Fase3DaemonRunning {
+    # Misma heurística que en -Restart: evita falso positivo con otro php que lleve "run-daemon" en la línea.
     $lines = Get-PhpCommandLines
     foreach ($line in $lines) {
         if ($null -eq $line) { continue }
-        if ($line -like '*run-daemon*') {
+        if (($line -like '*run-daemon*') -and ($line -like '*JobTableRunner*')) {
             return $true
         }
     }

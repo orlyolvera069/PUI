@@ -537,6 +537,39 @@ class PuiJobOracleRepository
     }
 
     /**
+     * Reencola jobs "huérfanos" en RUNNING: lock antiguo, o sin LOCKED_AT pero UPDATED_AT antiguo (inconsistencia / crash).
+     *
+     * @param int $staleSeconds Umbral en segundos para considerar vencido LOCKED_AT o UPDATED_AT.
+     */
+    public function requeueStaleRunning(int $staleSeconds = 300, ?string $requestId = null): void
+    {
+        $db = new Database();
+        if ($db->db_activa === null) {
+            return;
+        }
+
+        $staleSeconds = max(30, $staleSeconds);
+        $sql = <<<SQL
+            UPDATE PUI_JOBS
+            SET STATUS = 'RETRY',
+                RUN_AT = SYSTIMESTAMP,
+                LOCKED_BY = NULL,
+                LOCKED_AT = NULL,
+                UPDATED_AT = SYSTIMESTAMP
+            WHERE STATUS = 'RUNNING'
+              AND (
+                  (LOCKED_AT IS NOT NULL AND LOCKED_AT <= (SYSTIMESTAMP - NUMTODSINTERVAL(:stale_lock, 'SECOND')))
+                  OR
+                  (LOCKED_AT IS NULL AND UPDATED_AT <= (SYSTIMESTAMP - NUMTODSINTERVAL(:stale_row, 'SECOND')))
+              )
+        SQL;
+        $this->tryInsert($db, $sql, [
+            'stale_lock' => $staleSeconds,
+            'stale_row' => $staleSeconds,
+        ], 'requeueStaleRunning', $requestId, null);
+    }
+
+    /**
      * Encola una resincronización outbound, deduplicada por (job_type, id_reporte).
      *
      * @param array<string,mixed> $payload

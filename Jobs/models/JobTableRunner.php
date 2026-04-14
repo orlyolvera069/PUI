@@ -27,6 +27,12 @@ class JobTableRunner
         } catch (\Throwable $e) {
             $runRid = 'job-runner-' . uniqid('', true);
         }
+        // Umbral alto por defecto: la fase 3 puede superar varios timeouts HTTP; un valor ~90s re-encolaba jobs aún vivos.
+        $staleLockSeconds = max(
+            120,
+            (int) PuiConfig::get('PUI_FASE3_STALE_LOCK_SECONDS', 900)
+        );
+        $jobsRepo->requeueStaleRunning($staleLockSeconds, $runRid);
         $jobs = $jobsRepo->obtenerJobsPendientes($limit);
         $resumenCandidatos = [];
         foreach ($jobs as $j) {
