@@ -462,6 +462,7 @@ class PuiFrontController
     /** @param array<string,mixed> $body */
     private function sendRaw(int $status, array $body): void
     {
+        $body = $this->withoutMeta($body);
         if (function_exists('jsonResponse')) {
             jsonResponse($body, $status);
         }
@@ -497,11 +498,25 @@ class PuiFrontController
                 'detalle' => $d,
             ],
         ];
+        $payload = $this->withoutMeta($payload);
         if (function_exists('jsonResponse')) {
             jsonResponse($payload, $http);
         }
         http_response_code($http);
         echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         exit;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function withoutMeta(array $payload): array
+    {
+        if (array_key_exists('meta', $payload)) {
+            unset($payload['meta']);
+        }
+
+        return $payload;
     }
 }

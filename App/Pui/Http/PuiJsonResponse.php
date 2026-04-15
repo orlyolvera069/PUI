@@ -13,11 +13,6 @@ class PuiJsonResponse
     public static function databaseUnavailablePayload(string $requestId): array
     {
         return [
-            'meta' => [
-                'requestId' => $requestId,
-                'timestamp' => gmdate('c'),
-                'version' => '1.0.0',
-            ],
             'error' => [
                 'codigo' => 'PUI-DB-503',
                 'mensaje' => 'Servicio de base de datos no disponible.',

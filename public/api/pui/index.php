@@ -53,6 +53,9 @@ function jsonResponse($data, int $status = 200): void
     while (ob_get_level() > 0) {
         ob_end_clean();
     }
+    if (is_array($data) && array_key_exists('meta', $data)) {
+        unset($data['meta']);
+    }
     http_response_code($status);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
