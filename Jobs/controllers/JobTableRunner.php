@@ -68,8 +68,21 @@ class JobTableRunner extends Job
     {
         $worker = php_uname('n') . ':' . getmypid();
         while (true) {
-            $res = RunnerDao::runOnce($limit, $worker);
-            $this->SaveLog('runDaemon tick procesados=' . $res['procesados'] . ' errores=' . $res['errores']);
+            $procesadosTick = 0;
+            $erroresTick = 0;
+            $vueltasTick = 0;
+            do {
+                $res = RunnerDao::runOnce($limit, $worker);
+                $procesadosTick += (int) ($res['procesados'] ?? 0);
+                $erroresTick += (int) ($res['errores'] ?? 0);
+                $vueltasTick++;
+            } while (((int) ($res['candidatos'] ?? 0)) > 0);
+
+            $this->SaveLog(
+                'runDaemon tick procesados=' . $procesadosTick
+                . ' errores=' . $erroresTick
+                . ' vueltas=' . $vueltasTick
+            );
             if ($lockFile !== null) {
                 $dir = dirname($lockFile);
                 if (!is_dir($dir)) {

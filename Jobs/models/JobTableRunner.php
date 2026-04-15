@@ -12,7 +12,7 @@ use App\Pui\Service\PuiSearchOrchestratorService;
 class JobTableRunner
 {
     /**
-     * @return array{procesados:int,errores:int}
+     * @return array{procesados:int,errores:int,candidatos:int}
      */
     public static function runOnce(int $limit, string $workerId): array
     {
@@ -161,6 +161,6 @@ class JobTableRunner
 
         $jobsRepo->requeueStaleRunning($staleLockSeconds, $runRid);
 
-        return ['procesados' => $procesados, 'errores' => $errores];
+        return ['procesados' => $procesados, 'errores' => $errores, 'candidatos' => \count($jobs)];
     }
 }
